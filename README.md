@@ -24,6 +24,9 @@ contracts -- A Merkleized MIPS processor on chain + the challenge logic
 
 ## Usage
 ```
+# build unicorn2
+./build_unicorn.sh
+
 # build minigeth for MIPS
 (cd mipigo && pip3 install -r requirements.txt && ./build.sh)
 
