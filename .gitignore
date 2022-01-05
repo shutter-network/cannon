@@ -3,4 +3,5 @@ artifacts
 cache
 unicorn
 unicorn2
+venv
 .*.swp
