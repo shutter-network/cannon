@@ -46,7 +46,8 @@ func (tx *ShutterTx) copy() TxData {
 		cpy.GasFeeCap.Set(tx.GasFeeCap)
 	}
 	if tx.EncryptedPayload != nil {
-		cpy.EncryptedPayload = append(cpy.EncryptedPayload, tx.EncryptedPayload...)
+		cpy.EncryptedPayload = make([]byte, len(tx.EncryptedPayload))
+		copy(cpy.EncryptedPayload, tx.EncryptedPayload)
 	}
 	if tx.V != nil {
 		cpy.V.Set(tx.V)
@@ -74,6 +75,7 @@ func (tx *ShutterTx) value() *big.Int          { return nil }
 func (tx *ShutterTx) nonce() uint64            { return tx.Nonce }
 func (tx *ShutterTx) to() *common.Address      { return nil }
 func (tx *ShutterTx) encryptedPayload() []byte { return tx.EncryptedPayload }
+func (tx *ShutterTx) decryptionKey() []byte    { return nil }
 
 func (tx *ShutterTx) rawSignatureValues() (v, r, s *big.Int) {
 	return tx.V, tx.R, tx.S

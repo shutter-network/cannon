@@ -95,6 +95,7 @@ func (tx *DynamicFeeTx) value() *big.Int          { return tx.Value }
 func (tx *DynamicFeeTx) nonce() uint64            { return tx.Nonce }
 func (tx *DynamicFeeTx) to() *common.Address      { return tx.To }
 func (tx *DynamicFeeTx) encryptedPayload() []byte { return nil }
+func (tx *DynamicFeeTx) decryptionKey() []byte    { return nil }
 
 func (tx *DynamicFeeTx) rawSignatureValues() (v, r, s *big.Int) {
 	return tx.V, tx.R, tx.S
