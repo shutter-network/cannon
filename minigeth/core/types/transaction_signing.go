@@ -266,6 +266,9 @@ func (s eip2930Signer) Sender(tx *Transaction) (common.Address, error) {
 		// AL txs are defined to use 0 and 1 as their recovery
 		// id, add 27 to become equivalent to unprotected Homestead signatures.
 		V = new(big.Int).Add(V, big.NewInt(27))
+	case ShutterTxType:
+		// same as access list or dynamic fee txs
+		V = new(big.Int).Add(V, big.NewInt(27))
 	default:
 		return common.Address{}, ErrTxTypeNotSupported
 	}
@@ -282,6 +285,13 @@ func (s eip2930Signer) SignatureValues(tx *Transaction, sig []byte) (R, S, V *bi
 	case *AccessListTx:
 		// Check that chain ID of tx matches the signer. We also accept ID zero here,
 		// because it indicates that the chain ID was not specified in the tx.
+		if txdata.ChainID.Sign() != 0 && txdata.ChainID.Cmp(s.chainId) != 0 {
+			return nil, nil, nil, ErrInvalidChainId
+		}
+		R, S, _ = decodeSignature(sig)
+		V = big.NewInt(int64(sig[64]))
+	case *ShutterTx:
+		// same as access list or dynamic fee txs
 		if txdata.ChainID.Sign() != 0 && txdata.ChainID.Cmp(s.chainId) != 0 {
 			return nil, nil, nil, ErrInvalidChainId
 		}
@@ -319,6 +329,17 @@ func (s eip2930Signer) Hash(tx *Transaction) common.Hash {
 				tx.Value(),
 				tx.Data(),
 				tx.AccessList(),
+			})
+	case ShutterTxType:
+		return prefixedRlpHash(
+			tx.Type(),
+			[]interface{}{
+				s.chainId,
+				tx.Nonce(),
+				tx.GasTipCap(),
+				tx.GasFeeCap(),
+				tx.Gas(),
+				tx.EncryptedPayload(),
 			})
 	default:
 		// This _should_ not happen, but in case someone sends in a bad
