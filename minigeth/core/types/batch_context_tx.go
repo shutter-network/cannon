@@ -22,14 +22,14 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 )
 
-type DecryptionKeyTx struct {
+type BatchContextTx struct {
 	ChainID       *big.Int
 	DecryptionKey []byte
 }
 
 // copy creates a deep copy of the transaction data and initializes all fields.
-func (tx *DecryptionKeyTx) copy() TxData {
-	cpy := &DecryptionKeyTx{
+func (tx *BatchContextTx) copy() TxData {
+	cpy := &BatchContextTx{
 		ChainID:       tx.ChainID,
 		DecryptionKey: []byte{},
 	}
@@ -44,25 +44,25 @@ func (tx *DecryptionKeyTx) copy() TxData {
 }
 
 // accessors for innerTx.
-func (tx *DecryptionKeyTx) txType() byte             { return DynamicFeeTxType }
-func (tx *DecryptionKeyTx) chainID() *big.Int        { return tx.ChainID }
-func (tx *DecryptionKeyTx) protected() bool          { return true }
-func (tx *DecryptionKeyTx) accessList() AccessList   { return nil }
-func (tx *DecryptionKeyTx) data() []byte             { return nil }
-func (tx *DecryptionKeyTx) gas() uint64              { return 0 }
-func (tx *DecryptionKeyTx) gasFeeCap() *big.Int      { return big.NewInt(0) }
-func (tx *DecryptionKeyTx) gasTipCap() *big.Int      { return big.NewInt(0) }
-func (tx *DecryptionKeyTx) gasPrice() *big.Int       { return big.NewInt(0) }
-func (tx *DecryptionKeyTx) value() *big.Int          { return big.NewInt(0) }
-func (tx *DecryptionKeyTx) nonce() uint64            { return 0 }
-func (tx *DecryptionKeyTx) to() *common.Address      { return nil }
-func (tx *DecryptionKeyTx) encryptedPayload() []byte { return nil }
-func (tx *DecryptionKeyTx) decryptionKey() []byte    { return tx.DecryptionKey }
+func (tx *BatchContextTx) txType() byte             { return BatchContextTxType }
+func (tx *BatchContextTx) chainID() *big.Int        { return tx.ChainID }
+func (tx *BatchContextTx) protected() bool          { return true }
+func (tx *BatchContextTx) accessList() AccessList   { return nil }
+func (tx *BatchContextTx) data() []byte             { return nil }
+func (tx *BatchContextTx) gas() uint64              { return 0 }
+func (tx *BatchContextTx) gasFeeCap() *big.Int      { return big.NewInt(0) }
+func (tx *BatchContextTx) gasTipCap() *big.Int      { return big.NewInt(0) }
+func (tx *BatchContextTx) gasPrice() *big.Int       { return big.NewInt(0) }
+func (tx *BatchContextTx) value() *big.Int          { return big.NewInt(0) }
+func (tx *BatchContextTx) nonce() uint64            { return 0 }
+func (tx *BatchContextTx) to() *common.Address      { return nil }
+func (tx *BatchContextTx) encryptedPayload() []byte { return nil }
+func (tx *BatchContextTx) decryptionKey() []byte    { return tx.DecryptionKey }
 
-func (tx *DecryptionKeyTx) rawSignatureValues() (v, r, s *big.Int) {
+func (tx *BatchContextTx) rawSignatureValues() (v, r, s *big.Int) {
 	return big.NewInt(0), big.NewInt(0), big.NewInt(0)
 }
 
-func (tx *DecryptionKeyTx) setSignatureValues(chainID, v, r, s *big.Int) {
+func (tx *BatchContextTx) setSignatureValues(chainID, v, r, s *big.Int) {
 	// Decryption key transactions are not signed, so do nothing
 }

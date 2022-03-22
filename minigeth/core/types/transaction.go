@@ -45,8 +45,8 @@ const (
 	LegacyTxType = iota
 	AccessListTxType
 	DynamicFeeTxType
-	ShutterTxType       = 0x50
-	DecryptionKeyTxType = 0x5a
+	ShutterTxType      = 0x50
+	BatchContextTxType = 0x5a
 )
 
 // Transaction is an Ethereum transaction.
@@ -194,8 +194,8 @@ func (tx *Transaction) decodeTyped(b []byte) (TxData, error) {
 		var inner ShutterTx
 		err := rlp.DecodeBytes(b[1:], &inner)
 		return &inner, err
-	case DecryptionKeyTxType:
-		var inner DecryptionKeyTx
+	case BatchContextTxType:
+		var inner BatchContextTx
 		err := rlp.DecodeBytes(b[1:], &inner)
 		return &inner, err
 	default:
