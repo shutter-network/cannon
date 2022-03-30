@@ -18,8 +18,7 @@ package core
 
 import (
 	"fmt"
-	"math/big"
-
+	"github.com/ethereum/go-ethereum/abi"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/math"
 	"github.com/ethereum/go-ethereum/consensus"
@@ -29,7 +28,17 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rlp"
+	"log"
+	"math/big"
+	"strings"
 )
+
+var eonKeyStorageAbi abi.ABI
+
+func init() {
+	def := `[{ "name": "method", "type": "function", "outputs": [{"type": "bytes"}]}]`
+	eonKeyStorageAbi, _ = abi.JSON(strings.NewReader(def))
+}
 
 // StateProcessor is a basic Processor, which takes care of transitioning
 // state from one point to another.
@@ -84,81 +93,128 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 	// check batch signature
 
 	// check decryption key against eon key in contract
-	decryptionKey := contextTx.DecryptionKey()
-	fmt.Println(decryptionKey)
+	if p.config.EonKeyBroadcastAddress.String() != "" {
+		decryptionKey := contextTx.DecryptionKey()
+		fmt.Println(decryptionKey)
 
-	// execute envelopes of encrypted txs. Keep track of nonces to be used later for execution the payloads
-	feePaid := make(map[int]bool)
-	coinbase := block.Coinbase()
-	for i, tx := range block.Transactions() {
-		feePaid[i] = false
-		if tx.Type() != types.ShutterTxType {
-			continue
-		}
-		sender, err := signer.Sender(tx)
+		blankTxContext := vm.TxContext{Origin: common.Address{}, GasPrice: common.Big0}
+		e := vm.NewEVM(blockContext, blankTxContext, statedb, p.config, cfg)
+		eonKeyBytes, err := getEonKeyFromContract(e, p.config.EonKeyBroadcastAddress, blockNumber)
 		if err != nil {
-			return nil, nil, 0, fmt.Errorf("could not extract signer of tx %d [%v]: %w", i, tx.Hash().Hex(), err)
+			return nil, nil, 0, err
 		}
-		gasPrice := math.BigMin(new(big.Int).Add(tx.GasTipCap(), header.BaseFee), tx.GasFeeCap())
-		gasFee := new(big.Int).Mul(gasPrice, new(big.Int).SetUint64(tx.Gas()))
+		log.Printf("eon key from contract: %s", common.Bytes2Hex(eonKeyBytes))
 
-		balance := statedb.GetBalance(sender)
-		if balance.Cmp(gasFee) > 0 {
-			statedb.SubBalance(sender, gasFee)
-			statedb.AddBalance(coinbase, gasFee)
-			feePaid[i] = true
-		}
-	}
+		// TODO: check the decryptionKey with eonKeyBytes and only continue if correct
 
-	// decrypt and execute payloads of encrypted txs if they paid the transaction fee
-	// if this fails, at least increment the sender's nonce, so that the tx can't be replayed
-	for i, tx := range block.Transactions() {
-		if tx.Type() != types.ShutterTxType {
-			continue
-		}
-		if !feePaid[i] {
-			continue
-		}
+		// execute envelopes of encrypted txs. Keep track of nonces to be used later for execution the payloads
+		feePaid := make(map[int]bool)
+		coinbase := block.Coinbase()
+		for i, tx := range block.Transactions() {
+			feePaid[i] = false
+			if tx.Type() != types.ShutterTxType {
+				continue
+			}
+			sender, err := signer.Sender(tx)
+			if err != nil {
+				return nil, nil, 0, fmt.Errorf("could not extract signer of tx %d [%v]: %w", i, tx.Hash().Hex(), err)
+			}
+			gasPrice := math.BigMin(new(big.Int).Add(tx.GasTipCap(), header.BaseFee), tx.GasFeeCap())
+			gasFee := new(big.Int).Mul(gasPrice, new(big.Int).SetUint64(tx.Gas()))
 
-		sender, err := signer.Sender(tx)
-		if err != nil {
-			return nil, nil, 0, fmt.Errorf("could not extract signer of tx %d [%v]: %w", i, tx.Hash().Hex(), err)
+			balance := statedb.GetBalance(sender)
+			if balance.Cmp(gasFee) > 0 {
+				statedb.SubBalance(sender, gasFee)
+				statedb.AddBalance(coinbase, gasFee)
+				feePaid[i] = true
+			}
 		}
 
-		// decryptedPayloadBytes, err := shcrypto.decrypt(tx.EncryptedPayload(), decryptionKey)
-		// if err != nil {
-		// 	fmt.Println("could not decrypt tx %d [%v]: %w", i, tx.Hash().Hex(), err)
-		// 	continue
-		// }
-		decryptedPayloadBytes := tx.EncryptedPayload()
-		var decryptedPayload types.DecryptedPayload
-		err = rlp.DecodeBytes(decryptedPayloadBytes, &decryptedPayload)
-		if err != nil {
-			fmt.Printf("could not parse decrypted tx %d [%v]: %s\n", i, tx.Hash().Hex(), err)
-			statedb.SetNonce(sender, statedb.GetNonce(sender)+1)
-			continue
+		// decrypt and execute payloads of encrypted txs if they paid the transaction fee
+		// if this fails, at least increment the sender's nonce, so that the tx can't be replayed
+		for i, tx := range block.Transactions() {
+			if tx.Type() != types.ShutterTxType {
+				continue
+			}
+			if !feePaid[i] {
+				continue
+			}
+
+			sender, err := signer.Sender(tx)
+			if err != nil {
+				return nil, nil, 0, fmt.Errorf("could not extract signer of tx %d [%v]: %w", i, tx.Hash().Hex(), err)
+			}
+
+			// decryptedPayloadBytes, err := shcrypto.decrypt(tx.EncryptedPayload(), decryptionKey)
+			// if err != nil {
+			// 	fmt.Println("could not decrypt tx %d [%v]: %w", i, tx.Hash().Hex(), err)
+			// 	continue
+			// }
+			decryptedPayloadBytes := tx.EncryptedPayload()
+			var decryptedPayload types.DecryptedPayload
+			err = rlp.DecodeBytes(decryptedPayloadBytes, &decryptedPayload)
+			if err != nil {
+				fmt.Printf("could not parse decrypted tx %d [%v]: %s\n", i, tx.Hash().Hex(), err)
+				statedb.SetNonce(sender, statedb.GetNonce(sender)+1)
+				continue
+			}
+			msg, err := decryptedPayload.AsMessage(tx, signer)
+			if err != nil {
+				fmt.Printf("could not convert decrypted tx into msg %d [%v]: %s\n", i, tx.Hash().Hex(), err)
+				statedb.SetNonce(sender, statedb.GetNonce(sender)+1)
+				continue
+			}
+			statedb.Prepare(tx.Hash(), i)
+			receipt, err := applyTransaction(msg, p.config, p.bc, nil, gp, statedb, blockNumber, blockHash, tx, usedGas, vmenv)
+			if err != nil {
+				fmt.Printf("could not apply decrypted tx %d [%v]: %s\n", i, tx.Hash().Hex(), err)
+				statedb.SetNonce(sender, statedb.GetNonce(sender)+1)
+				continue
+			}
+			receipts = append(receipts, receipt)
+			allLogs = append(allLogs, receipt.Logs...)
 		}
-		msg, err := decryptedPayload.AsMessage(tx, signer)
-		if err != nil {
-			fmt.Printf("could not convert decrypted tx into msg %d [%v]: %s\n", i, tx.Hash().Hex(), err)
-			statedb.SetNonce(sender, statedb.GetNonce(sender)+1)
-			continue
-		}
-		statedb.Prepare(tx.Hash(), i)
-		receipt, err := applyTransaction(msg, p.config, p.bc, nil, gp, statedb, blockNumber, blockHash, tx, usedGas, vmenv)
-		if err != nil {
-			fmt.Printf("could not apply decrypted tx %d [%v]: %s\n", i, tx.Hash().Hex(), err)
-			statedb.SetNonce(sender, statedb.GetNonce(sender)+1)
-			continue
-		}
-		receipts = append(receipts, receipt)
-		allLogs = append(allLogs, receipt.Logs...)
 	}
 
 	// Finalize the block, applying any consensus engine specific extras (e.g. block rewards)
 	p.engine.Finalize(p.bc, header, statedb, block.Transactions(), block.Uncles())
 
 	return receipts, allLogs, *usedGas, nil
+}
+
+func getEonKeyFromContract(e *vm.EVM, eonKeyContract common.Address, blockNumber *big.Int) ([]byte, error) {
+
+	contract := vm.AccountRef(eonKeyContract)
+
+	selector := crypto.Keccak256([]byte("get(uint64)"))[:4]
+	// TODO: use L1 block number instead of L2 block number here
+	paddedBlk := common.BigToHash(blockNumber)
+	callData := append(selector, paddedBlk.Bytes()...)
+
+	result, _, err := e.Call(contract, eonKeyContract, callData, 1000000, common.Big0)
+	if (err != nil) {
+		log.Printf("could not find an eon key for block number %s: %s", blockNumber, err)
+		result = []byte{}
+	}
+
+	// decode result with abi
+	eonKeyBytes := []byte{}
+	if len(result) != 0 {
+		decoded, err := eonKeyStorageAbi.Unpack("method", result)
+		if err != nil {
+			return nil, err
+		}
+		if len(decoded) != 1 {
+			return nil, fmt.Errorf("decoded multiple outputs with eon key storage abi")
+		}
+		var ok bool
+		eonKeyBytes, ok = decoded[0].([]byte)
+		if !ok {
+			return nil, fmt.Errorf("could not decode bytes out of eon key output")
+		}
+	}
+
+	return eonKeyBytes, nil
 }
 
 func applyTransaction(msg types.Message, config *params.ChainConfig, bc ChainContext, author *common.Address, gp *GasPool, statedb *state.StateDB, blockNumber *big.Int, blockHash common.Hash, tx *types.Transaction, usedGas *uint64, evm *vm.EVM) (*types.Receipt, error) {
