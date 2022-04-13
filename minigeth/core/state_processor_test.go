@@ -1,3 +1,6 @@
+// The tests require geth to run in dev mode.
+// You can run geth with `SHROOT=geth_chain ../../start_geth.sh`
+
 package core
 
 import (
