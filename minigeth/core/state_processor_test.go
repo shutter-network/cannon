@@ -510,3 +510,91 @@ func TestGetEonKey(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestPlaintextTx(t *testing.T) {
+	// Tests that a plaintext tx is properly executed after a ciphertext tx
+	parent, statedb := prepare(t)
+	contextTx := &types.BatchContextTx{
+		ChainID:       config.ChainID,
+		DecryptionKey: []byte{},
+	}
+
+	receiver := common.HexToAddress("2222222222222222222222222222222222222222")
+	amount := big.NewInt(100)
+	decryptedPayload := types.DecryptedPayload{
+		To:    &receiver,
+		Value: amount,
+		Data:  []byte{},
+	}
+	decryptedPayloadEncoded, err := rlp.EncodeToBytes(decryptedPayload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	shutterTx := &types.ShutterTx{
+		ChainID:          config.ChainID,
+		Nonce:            2,
+		GasTipCap:        big.NewInt(0),
+		GasFeeCap:        big.NewInt(0),
+		Gas:              21000,
+		EncryptedPayload: decryptedPayloadEncoded, // TODO: encrypt
+	}
+	signer := types.LatestSigner(config)
+	signedTx, err := types.SignNewTx(userKey, signer, shutterTx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plainTxData := &types.LegacyTx{
+		Nonce: 3,
+		GasPrice: common.Big0,
+		Gas: 21000,
+		To: &receiver,
+		Value: amount,
+	}
+	signedPlainTx, err := types.SignNewTx(userKey, signer, plainTxData)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	transactions := []*types.Transaction{
+		types.NewTx(contextTx),
+		signedTx,
+		signedPlainTx,
+	}
+
+	senderBalancePre := statedb.GetBalance(userAddress)
+	receiverBalancePre := statedb.GetBalance(receiver)
+
+	receipts, logs, gasUsed, err := process(t, parent, statedb, transactions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(receipts) != 2 {
+		t.Fatal("expected 2 receipt")
+	}
+	if receipts[0].Status != types.ReceiptStatusSuccessful {
+		t.Fatal("cipher tx should have been successful")
+	}
+	if receipts[1].Status != types.ReceiptStatusSuccessful {
+		t.Fatal("plain tx should have been successful")
+	}
+	if len(logs) != 0 {
+		t.Fatal("expected 0 logs")
+	}
+	if gasUsed != 42000 {
+		t.Fatalf("expected 42000 gas used, got %d", gasUsed)
+	}
+
+	senderBalancePost := statedb.GetBalance(userAddress)
+	receiverBalancePost := statedb.GetBalance(receiver)
+
+	senderBalanceDiff := new(big.Int).Sub(senderBalancePost, senderBalancePre)
+	receiverBalanceDiff := new(big.Int).Sub(receiverBalancePost, receiverBalancePre)
+	expectedDiff := new(big.Int).Mul(amount, common.Big2)
+
+	if senderBalanceDiff.Cmp(new(big.Int).Neg(expectedDiff)) != 0 {
+		t.Fatalf("expected sender balance to decrease by %d, got increase by %d", expectedDiff, senderBalanceDiff)
+	}
+	if receiverBalanceDiff.Cmp(expectedDiff) != 0 {
+		t.Fatalf("expected receiver balance to increase by %d, got %d", expectedDiff, receiverBalanceDiff)
+	}
+}
