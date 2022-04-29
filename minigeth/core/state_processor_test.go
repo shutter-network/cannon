@@ -11,7 +11,6 @@ import (
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/consensus/misc"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
@@ -29,7 +28,7 @@ var (
 	config                = params.TestChainConfig
 	genesisHash           = common.HexToHash("0xd702d0441aa0045ac875b526e6ea7064e67604ef2162034a9b7260540f3e9f25")
 	signer                types.Signer
-	baseFee               = new(big.Int).SetUint64(1_000_000_000) // 1 GWei
+	defaultBaseFee        = new(big.Int).SetUint64(1_000_000_000) // 1 GWei
 	activationBlockNumber = big.NewInt(100)
 
 	deployerKey      *ecdsa.PrivateKey
@@ -186,7 +185,7 @@ func deployEonKey(t *testing.T, statedb *state.StateDB) {
 		ChainID:   config.ChainID,
 		Nonce:     statedb.GetNonce(deployerAddress),
 		GasTipCap: common.Big0,
-		GasFeeCap: big.NewInt(875000000),
+		GasFeeCap: defaultBaseFee,
 		Gas:       10000000,
 		To:        nil,
 		Value:     common.Big0,
@@ -207,7 +206,7 @@ func deployEonKey(t *testing.T, statedb *state.StateDB) {
 		ChainID:   config.ChainID,
 		Nonce:     statedb.GetNonce(deployerAddress),
 		GasTipCap: common.Big0,
-		GasFeeCap: big.NewInt(875000000),
+		GasFeeCap: defaultBaseFee,
 		Gas:       10000000,
 		To:        &config.EonKeyBroadcastAddress,
 		Value:     common.Big0,
@@ -229,7 +228,7 @@ func deployCollatorConfig(t *testing.T, statedb *state.StateDB) {
 		ChainID:   config.ChainID,
 		Nonce:     statedb.GetNonce(deployerAddress),
 		GasTipCap: common.Big0,
-		GasFeeCap: big.NewInt(875000000),
+		GasFeeCap: defaultBaseFee,
 		Gas:       10000000,
 		To:        nil,
 		Value:     common.Big0,
@@ -253,7 +252,7 @@ func deployCollatorConfig(t *testing.T, statedb *state.StateDB) {
 		ChainID:   config.ChainID,
 		Nonce:     statedb.GetNonce(deployerAddress),
 		GasTipCap: common.Big0,
-		GasFeeCap: big.NewInt(875000000),
+		GasFeeCap: defaultBaseFee,
 		Gas:       10000000,
 		To:        &addrsSeqAddress,
 		Value:     common.Big0,
@@ -267,7 +266,7 @@ func deployCollatorConfig(t *testing.T, statedb *state.StateDB) {
 		ChainID:   config.ChainID,
 		Nonce:     statedb.GetNonce(deployerAddress) + 1,
 		GasTipCap: common.Big0,
-		GasFeeCap: big.NewInt(875000000),
+		GasFeeCap: defaultBaseFee,
 		Gas:       10000000,
 		To:        &addrsSeqAddress,
 		Value:     common.Big0,
@@ -279,7 +278,7 @@ func deployCollatorConfig(t *testing.T, statedb *state.StateDB) {
 		ChainID:   config.ChainID,
 		Nonce:     statedb.GetNonce(deployerAddress) + 2,
 		GasTipCap: common.Big0,
-		GasFeeCap: big.NewInt(875000000),
+		GasFeeCap: defaultBaseFee,
 		Gas:       10000000,
 		To:        &addrsSeqAddress,
 		Value:     common.Big0,
@@ -296,7 +295,7 @@ func deployCollatorConfig(t *testing.T, statedb *state.StateDB) {
 		ChainID:   config.ChainID,
 		Nonce:     statedb.GetNonce(deployerAddress) + 3,
 		GasTipCap: common.Big0,
-		GasFeeCap: big.NewInt(875000000),
+		GasFeeCap: defaultBaseFee,
 		Gas:       10000000,
 		To:        nil,
 		Value:     common.Big0,
@@ -320,7 +319,7 @@ func deployCollatorConfig(t *testing.T, statedb *state.StateDB) {
 		ChainID:   config.ChainID,
 		Nonce:     statedb.GetNonce(deployerAddress),
 		GasTipCap: common.Big0,
-		GasFeeCap: big.NewInt(875000000),
+		GasFeeCap: defaultBaseFee,
 		Gas:       10000000,
 		To:        &config.CollatorConfigListAddress,
 		Value:     common.Big0,
@@ -335,6 +334,10 @@ func deployCollatorConfig(t *testing.T, statedb *state.StateDB) {
 }
 
 func processBatchTx(t *testing.T, statedb *state.StateDB, batchTx *types.Transaction) (types.Receipts, []*types.Log, uint64, error) {
+	return processBatchTxWithFee(t, statedb, batchTx, defaultBaseFee)
+}
+
+func processBatchTxWithFee(t *testing.T, statedb *state.StateDB, batchTx *types.Transaction, baseFee *big.Int) (types.Receipts, []*types.Log, uint64, error) {
 	t.Helper()
 
 	if batchTx.Type() != types.BatchTxType {
@@ -377,7 +380,7 @@ func processBatchTx(t *testing.T, statedb *state.StateDB, batchTx *types.Transac
 		MixDigest: common.Hash{},
 		Nonce:     types.BlockNonce{},
 
-		BaseFee: misc.CalcBaseFee(config, &parent),
+		BaseFee: baseFee,
 	}
 	vmconfig := vm.Config{NoBaseFee: true}
 	bc := NewBlockChain(&parent)
@@ -421,7 +424,7 @@ func getBatchIndexTesting(t *testing.T, statedb *state.StateDB) uint64 {
 		MixDigest: common.Hash{},
 		Nonce:     types.BlockNonce{},
 
-		BaseFee: baseFee,
+		BaseFee: defaultBaseFee,
 	}
 	bc := NewBlockChain(header)
 	blockContext := NewEVMBlockContext(header, bc, nil)
@@ -452,7 +455,7 @@ func TestEmptyBlock(t *testing.T) {
 		MixDigest: common.Hash{},
 		Nonce:     types.BlockNonce{},
 
-		BaseFee: baseFee,
+		BaseFee: defaultBaseFee,
 	}
 	header := types.Header{
 		ParentHash: common.Hash{},
@@ -471,7 +474,7 @@ func TestEmptyBlock(t *testing.T) {
 		MixDigest: common.Hash{},
 		Nonce:     types.BlockNonce{},
 
-		BaseFee: misc.CalcBaseFee(config, &parent),
+		BaseFee: defaultBaseFee,
 	}
 	block := types.NewBlock(&header, []*types.Transaction{}, nil, nil, trie.NewStackTrie(nil))
 
@@ -506,7 +509,7 @@ func TestEmptyShutterTx(t *testing.T) {
 		ChainID:          config.ChainID,
 		Nonce:            0,
 		GasTipCap:        big.NewInt(0),
-		GasFeeCap:        big.NewInt(0),
+		GasFeeCap:        defaultBaseFee,
 		Gas:              0,
 		EncryptedPayload: []byte{},
 		BatchIndex:       getBatchIndexTesting(t, statedb),
@@ -530,35 +533,109 @@ func TestEmptyShutterTx(t *testing.T) {
 
 func TestEmptyShutterTxWithFee(t *testing.T) {
 	statedb := prepare(t)
-	unsignedShutterTx := &types.ShutterTx{
-		ChainID:          config.ChainID,
-		Nonce:            0,
-		GasTipCap:        big.NewInt(0),
-		GasFeeCap:        big.NewInt(875000000),
-		Gas:              100,
-		EncryptedPayload: []byte{},
-		BatchIndex:       getBatchIndexTesting(t, statedb),
-	}
-	shutterTx, err := types.SignNewTx(userKey, signer, unsignedShutterTx)
-	fatalIfError(t, err)
-	batchTx := makeBatchTx(t, statedb, []*types.Transaction{shutterTx})
-	userBalancePre := statedb.GetBalance(userAddress)
 
-	receipts, logs, gasUsed, err := processBatchTx(t, statedb, batchTx)
-	fatalIfError(t, err)
-	if len(receipts) != 0 {
-		t.Fatalf("expected no receipts, got %d", len(receipts))
+	txGas := uint64(100)
+	tests := []struct {
+		name           string
+		txGasTipCap    *big.Int
+		txGasFeeCap    *big.Int
+		blockBaseFee   *big.Int
+		expectedFee    *big.Int
+		expectedReward *big.Int
+		blockValid     bool
+	}{
+		{
+			name:           "only base fee",
+			txGasTipCap:    common.Big0,
+			txGasFeeCap:    big.NewInt(600),
+			blockBaseFee:   big.NewInt(500),
+			expectedFee:    new(big.Int).Mul(big.NewInt(500), new(big.Int).SetUint64(txGas)),
+			expectedReward: common.Big0,
+			blockValid:     true,
+		},
+		{
+			name:           "only tip fee",
+			txGasTipCap:    big.NewInt(500),
+			txGasFeeCap:    big.NewInt(500),
+			blockBaseFee:   common.Big0,
+			expectedFee:    new(big.Int).Mul(big.NewInt(500), new(big.Int).SetUint64(txGas)),
+			expectedReward: new(big.Int).Mul(big.NewInt(500), new(big.Int).SetUint64(txGas)),
+			blockValid:     true,
+		},
+		{
+			name:           "base and tip fee",
+			txGasTipCap:    big.NewInt(200),
+			txGasFeeCap:    big.NewInt(600),
+			blockBaseFee:   big.NewInt(500),
+			expectedFee:    new(big.Int).Mul(big.NewInt(600), new(big.Int).SetUint64(txGas)),
+			expectedReward: new(big.Int).Mul(big.NewInt(100), new(big.Int).SetUint64(txGas)),
+			blockValid:     true,
+		},
+		{
+			name:         "invalid tip > cap",
+			txGasTipCap:  big.NewInt(100),
+			txGasFeeCap:  common.Big0,
+			blockBaseFee: common.Big0,
+			blockValid:   false,
+		},
+		{
+			name:         "invalid fee cap < base fee",
+			txGasTipCap:  common.Big0,
+			txGasFeeCap:  big.NewInt(99),
+			blockBaseFee: big.NewInt(100),
+			blockValid:   false,
+		},
 	}
-	if len(logs) != 0 {
-		t.Fatalf("expected no logs, got %d", len(logs))
-	}
-	if gasUsed != 0 {
-		t.Fatalf("expected tx to consume no gas, got %d", gasUsed)
-	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			unsignedShutterTx := &types.ShutterTx{
+				ChainID:          config.ChainID,
+				Nonce:            0,
+				GasTipCap:        tc.txGasTipCap,
+				GasFeeCap:        tc.txGasFeeCap,
+				Gas:              txGas,
+				EncryptedPayload: []byte{},
+			}
+			shutterTx, err := types.SignNewTx(userKey, signer, unsignedShutterTx)
+			if err != nil {
+				t.Fatal(err)
+			}
 
-	userBalancePost := statedb.GetBalance(userAddress)
-	expectedFee := new(big.Int).Mul(shutterTx.GasFeeCap(), new(big.Int).SetUint64(shutterTx.Gas()))
-	assertBalanceDiff(t, userBalancePre, userBalancePost, new(big.Int).Neg(expectedFee))
+			userBalancePre := statedb.GetBalance(userAddress)
+			sequencerBalancePre := statedb.GetBalance(sequencerAddress)
+
+			batchTx := makeBatchTx(t, statedb, []*types.Transaction{shutterTx})
+			receipts, logs, gasUsed, err := processBatchTxWithFee(t, statedb, batchTx, tc.blockBaseFee)
+
+			if !tc.blockValid {
+				if err == nil {
+					t.Fatalf("expected error when processing block")
+				}
+			} else {
+				if err != nil {
+					t.Fatal(err)
+				}
+
+				if len(receipts) != 0 {
+					t.Fatal("expected 0 receipts")
+				}
+				if len(logs) != 0 {
+					t.Fatal("expected 0 logs")
+				}
+				if gasUsed != 0 {
+					t.Fatal("expected 0 gas used")
+				}
+
+				userBalancePost := statedb.GetBalance(userAddress)
+				sequencerBalancePost := statedb.GetBalance(sequencerAddress)
+				blockReward := big.NewInt(5000000000000000000)
+				expectedSequencerDiff := new(big.Int).Add(tc.expectedReward, blockReward)
+
+				assertBalanceDiff(t, userBalancePre, userBalancePost, new(big.Int).Neg(tc.expectedFee))
+				assertBalanceDiff(t, sequencerBalancePre, sequencerBalancePost, expectedSequencerDiff)
+			}
+		})
+	}
 }
 
 func TestTransfer(t *testing.T) {
@@ -576,7 +653,7 @@ func TestTransfer(t *testing.T) {
 		ChainID:          config.ChainID,
 		Nonce:            statedb.GetNonce(userAddress),
 		GasTipCap:        big.NewInt(0),
-		GasFeeCap:        big.NewInt(0),
+		GasFeeCap:        defaultBaseFee,
 		Gas:              21000,
 		EncryptedPayload: encryptPayload(t, payload, batchIndex),
 		BatchIndex:       batchIndex,
@@ -598,9 +675,12 @@ func TestTransfer(t *testing.T) {
 		t.Fatalf("expected 21000 gas used, got %d", gasUsed)
 	}
 
+	fee := new(big.Int).Mul(defaultBaseFee, new(big.Int).SetUint64(gasUsed))
+	amountPlusFee := new(big.Int).Add(amount, fee)
+
 	senderBalancePost := statedb.GetBalance(userAddress)
 	receiverBalancePost := statedb.GetBalance(receiver)
-	assertBalanceDiff(t, senderBalancePre, senderBalancePost, new(big.Int).Neg(amount))
+	assertBalanceDiff(t, senderBalancePre, senderBalancePost, new(big.Int).Neg(amountPlusFee))
 	assertBalanceDiff(t, receiverBalancePre, receiverBalancePost, amount)
 }
 
@@ -617,7 +697,7 @@ func TestContractCall(t *testing.T) {
 		ChainID:          config.ChainID,
 		Nonce:            statedb.GetNonce(userAddress),
 		GasTipCap:        big.NewInt(0),
-		GasFeeCap:        big.NewInt(0),
+		GasFeeCap:        defaultBaseFee,
 		Gas:              1000000,
 		EncryptedPayload: encryptPayload(t, deployPayload, batchIndex),
 		BatchIndex:       batchIndex,
@@ -633,7 +713,7 @@ func TestContractCall(t *testing.T) {
 		ChainID:          config.ChainID,
 		Nonce:            statedb.GetNonce(userAddress) + 1,
 		GasTipCap:        big.NewInt(0),
-		GasFeeCap:        big.NewInt(0),
+		GasFeeCap:        defaultBaseFee,
 		Gas:              100000,
 		EncryptedPayload: encryptPayload(t, callPayload, batchIndex),
 		BatchIndex:       batchIndex,
@@ -669,7 +749,7 @@ func TestContractDeployment(t *testing.T) {
 		ChainID:          config.ChainID,
 		Nonce:            statedb.GetNonce(userAddress),
 		GasTipCap:        big.NewInt(0),
-		GasFeeCap:        big.NewInt(0),
+		GasFeeCap:        defaultBaseFee,
 		Gas:              1000000,
 		EncryptedPayload: encryptPayload(t, payload, batchIndex),
 		BatchIndex:       batchIndex,
@@ -718,7 +798,7 @@ func TestPlaintextTx(t *testing.T) {
 		ChainID:          config.ChainID,
 		Nonce:            statedb.GetNonce(userAddress),
 		GasTipCap:        big.NewInt(0),
-		GasFeeCap:        big.NewInt(0),
+		GasFeeCap:        defaultBaseFee,
 		Gas:              21000,
 		EncryptedPayload: encryptPayload(t, payload, batchIndex),
 		BatchIndex:       batchIndex,
@@ -727,7 +807,7 @@ func TestPlaintextTx(t *testing.T) {
 	fatalIfError(t, err)
 	unsignedPlainTx := &types.LegacyTx{
 		Nonce:    statedb.GetNonce(userAddress) + 1,
-		GasPrice: common.Big0,
+		GasPrice: defaultBaseFee,
 		Gas:      21000,
 		To:       &receiver,
 		Value:    amount,
@@ -751,9 +831,11 @@ func TestPlaintextTx(t *testing.T) {
 
 	senderBalancePost := statedb.GetBalance(userAddress)
 	receiverBalancePost := statedb.GetBalance(receiver)
-	expectedDiff := new(big.Int).Mul(amount, common.Big2)
-	assertBalanceDiff(t, senderBalancePre, senderBalancePost, new(big.Int).Neg(expectedDiff))
-	assertBalanceDiff(t, receiverBalancePre, receiverBalancePost, expectedDiff)
+	transferAmount := new(big.Int).Mul(amount, common.Big2)
+	fee := new(big.Int).Mul(new(big.Int).SetUint64(gasUsed), defaultBaseFee)
+	amountPlusFee := new(big.Int).Add(transferAmount, fee)
+	assertBalanceDiff(t, senderBalancePre, senderBalancePost, new(big.Int).Neg(amountPlusFee))
+	assertBalanceDiff(t, receiverBalancePre, receiverBalancePost, transferAmount)
 }
 
 func TestWrongBatchIndex(t *testing.T) {

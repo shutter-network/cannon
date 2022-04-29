@@ -67,6 +67,7 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 		header      = block.Header()
 		blockHash   = block.Hash()
 		blockNumber = block.Number()
+		coinbase    = block.Coinbase()
 		allLogs     []*types.Log
 		gp          = new(GasPool).AddGas(block.GasLimit())
 	)
@@ -111,6 +112,7 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 		incrementBatchIndexMsg.GasPrice(), // gas price
 		incrementBatchIndexMsg.Data(),     // data
 	)
+	batchIndexIncrementGas := uint64(0)
 	receipt, err := applyTransaction(
 		incrementBatchIndexMsg,
 		p.config,
@@ -121,7 +123,7 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 		blockNumber,
 		blockHash,
 		incrementBatchIndexTx,
-		new(uint64), // gas used (we don't care about that here)
+		&batchIndexIncrementGas,
 		vmenv,
 	)
 	if err != nil {
@@ -130,6 +132,8 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 	if receipt.Status != types.ReceiptStatusSuccessful {
 		return nil, nil, 0, fmt.Errorf("batch index increment message failed")
 	}
+	batchIndexIncrementFee := new(big.Int).Mul(new(big.Int).SetUint64(batchIndexIncrementGas), header.BaseFee)
+	statedb.AddBalance(coinbase, batchIndexIncrementFee) // refund sequencer for incrementing batch index
 
 	// Check the decryption key against the eon key in the eon key storage contract (unless the
 	// keypers have not published a key yet)
@@ -190,7 +194,6 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 	// executing them later.
 	feePaid := make(map[int]bool)
 	if eonKey != nil {
-		coinbase := block.Coinbase()
 		for i, tx := range transactions {
 			feePaid[i] = false
 			if tx.Type() != types.ShutterTxType {
@@ -200,13 +203,26 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 			if err != nil {
 				return nil, nil, 0, fmt.Errorf("could not extract signer of tx %d [%v]: %w", i, tx.Hash().Hex(), err)
 			}
-			gasPrice := math.BigMin(new(big.Int).Add(tx.GasTipCap(), header.BaseFee), tx.GasFeeCap())
+
+			if tx.GasFeeCap().Cmp(tx.GasTipCap()) < 0 {
+				return nil, nil, 0, fmt.Errorf("invalid tx %d [%v]: gas fee cap lower than gas tip cap (%v < %v)", i, tx.Hash(), tx.GasFeeCap(), tx.GasTipCap())
+			}
+			if tx.GasFeeCap().Cmp(header.BaseFee) < 0 {
+				return nil, nil, 0, fmt.Errorf("invalid tx %d [%v]: gas fee cap lower than header base fee (%v < %v)", i, tx.Hash(), tx.GasFeeCap(), header.BaseFee)
+			}
+
+			priorityFeeGasPrice := math.BigMin(tx.GasTipCap(), new(big.Int).Sub(tx.GasFeeCap(), header.BaseFee))
+			priorityFee := new(big.Int).Mul(priorityFeeGasPrice, new(big.Int).SetUint64(tx.Gas()))
+			gasPrice := new(big.Int).Add(priorityFeeGasPrice, header.BaseFee)
 			gasFee := new(big.Int).Mul(gasPrice, new(big.Int).SetUint64(tx.Gas()))
 
 			balance := statedb.GetBalance(sender)
-			if balance.Cmp(gasFee) > 0 {
+			if balance.Cmp(gasFee) < 0 {
+				return nil, nil, 0, fmt.Errorf("invalid tx %d [%v]: cannot pay for gas", i, tx.Hash())
+			}
+			if balance.Cmp(gasFee) >= 0 {
 				statedb.SubBalance(sender, gasFee)
-				statedb.AddBalance(coinbase, gasFee)
+				statedb.AddBalance(coinbase, priorityFee)
 				feePaid[i] = true
 			}
 		}
