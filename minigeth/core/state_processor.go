@@ -18,6 +18,10 @@ package core
 
 import (
 	"fmt"
+	"log"
+	"math/big"
+	"strings"
+
 	"github.com/ethereum/go-ethereum/abi"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/math"
@@ -28,9 +32,6 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rlp"
-	"log"
-	"math/big"
-	"strings"
 )
 
 var eonKeyStorageAbi abi.ABI
@@ -88,6 +89,40 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 	contextTx := block.Transactions()[0]
 	if contextTx.Type() != types.BatchContextTxType {
 		return nil, nil, 0, fmt.Errorf("first tx in block is not batch context tx")
+	}
+
+	// check and increment batch index
+	err := checkBatchIndex(vmenv, p.config.BatchCounterAddress, 0)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	incrementBatchIndexMsg := makeIncrementBatchIndexMessage(blockContext, statedb, p.config, cfg)
+	incrementBatchIndexTx := types.NewTransaction(
+		incrementBatchIndexMsg.Nonce(),    // nonce
+		*incrementBatchIndexMsg.To(),      // to
+		incrementBatchIndexMsg.Value(),    // amount
+		incrementBatchIndexMsg.Gas(),      // gas limit
+		incrementBatchIndexMsg.GasPrice(), // gas price
+		incrementBatchIndexMsg.Data(),     // data
+	)
+	receipt, err := applyTransaction(
+		incrementBatchIndexMsg,
+		p.config,
+		p.bc,
+		nil,
+		gp,
+		statedb,
+		blockNumber,
+		blockHash,
+		incrementBatchIndexTx,
+		usedGas,
+		vmenv,
+	)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	if receipt.Status != types.ReceiptStatusSuccessful {
+		return nil, nil, 0, fmt.Errorf("batch index increment message failed")
 	}
 
 	// check batch signature
@@ -210,7 +245,7 @@ func getEonKeyFromContract(e *vm.EVM, eonKeyContract common.Address, blockNumber
 	callData := append(selector, paddedBlk.Bytes()...)
 
 	result, _, err := e.Call(contract, eonKeyContract, callData, 1000000, common.Big0)
-	if (err != nil) {
+	if err != nil {
 		log.Printf("could not find an eon key for block number %s: %s", blockNumber, err)
 		result = []byte{}
 	}
@@ -233,6 +268,47 @@ func getEonKeyFromContract(e *vm.EVM, eonKeyContract common.Address, blockNumber
 	}
 
 	return eonKeyBytes, nil
+}
+
+// checkBatchIndex checks that the current batch counter value equals the given batch index.
+func checkBatchIndex(e *vm.EVM, batchCounterContract common.Address, batchIndex uint64) error {
+	caller := vm.AccountRef(common.Address{})
+	selector := crypto.Keccak256([]byte("batchIndex()"))[:4]
+	result, _, err := e.Call(caller, batchCounterContract, selector, 1000000, common.Big0)
+	if err != nil {
+		return err
+	}
+
+	resultBig := new(big.Int).SetBytes(result)
+	resultUint64 := resultBig.Uint64()
+	if new(big.Int).SetUint64(resultUint64).Cmp(resultBig) != 0 {
+		return fmt.Errorf("get batch index contract call result is not a uint64")
+	}
+	log.Println("current batch index", resultUint64)
+
+	if resultUint64 != batchIndex {
+		return fmt.Errorf("batch index %d does not match value in contract %d", batchIndex, resultUint64)
+	}
+	return nil
+}
+
+func makeIncrementBatchIndexMessage(blockCtx vm.BlockContext, statedb vm.StateDB, chainConfig *params.ChainConfig, config vm.Config) types.Message {
+	nonce := statedb.GetNonce(common.Address{})
+	selector := crypto.Keccak256([]byte("increment()"))[:4]
+	log.Println(chainConfig.BatchCounterAddress)
+	return types.NewMessage(
+		common.Address{},                 // from
+		&chainConfig.BatchCounterAddress, // to
+		nonce,                            // nonce
+		common.Big0,                      // amount
+		1000000,                          // gas limit
+		common.Big0,                      // gas price
+		common.Big0,                      // gas fee cap
+		common.Big0,                      // gas tip cap
+		selector,                         // data
+		nil,                              // access list
+		false,                            // fake
+	)
 }
 
 func applyTransaction(msg types.Message, config *params.ChainConfig, bc ChainContext, author *common.Address, gp *GasPool, statedb *state.StateDB, blockNumber *big.Int, blockHash common.Hash, tx *types.Transaction, usedGas *uint64, evm *vm.EVM) (*types.Receipt, error) {
