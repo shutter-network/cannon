@@ -92,38 +92,38 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 	}
 
 	// check and increment batch index
-	err := checkBatchIndex(vmenv, p.config.BatchCounterAddress, 0)
-	if err != nil {
-		return nil, nil, 0, err
-	}
-	incrementBatchIndexMsg := makeIncrementBatchIndexMessage(blockContext, statedb, p.config, cfg)
-	incrementBatchIndexTx := types.NewTransaction(
-		incrementBatchIndexMsg.Nonce(),    // nonce
-		*incrementBatchIndexMsg.To(),      // to
-		incrementBatchIndexMsg.Value(),    // amount
-		incrementBatchIndexMsg.Gas(),      // gas limit
-		incrementBatchIndexMsg.GasPrice(), // gas price
-		incrementBatchIndexMsg.Data(),     // data
-	)
-	receipt, err := applyTransaction(
-		incrementBatchIndexMsg,
-		p.config,
-		p.bc,
-		nil,
-		gp,
-		statedb,
-		blockNumber,
-		blockHash,
-		incrementBatchIndexTx,
-		usedGas,
-		vmenv,
-	)
-	if err != nil {
-		return nil, nil, 0, err
-	}
-	if receipt.Status != types.ReceiptStatusSuccessful {
-		return nil, nil, 0, fmt.Errorf("batch index increment message failed")
-	}
+	// err := checkBatchIndex(vmenv, p.config.BatchCounterAddress, 0)
+	// if err != nil {
+	// 	return nil, nil, 0, err
+	// }
+	// incrementBatchIndexMsg := makeIncrementBatchIndexMessage(blockContext, statedb, p.config, cfg)
+	// incrementBatchIndexTx := types.NewTransaction(
+	// 	incrementBatchIndexMsg.Nonce(),    // nonce
+	// 	*incrementBatchIndexMsg.To(),      // to
+	// 	incrementBatchIndexMsg.Value(),    // amount
+	// 	incrementBatchIndexMsg.Gas(),      // gas limit
+	// 	incrementBatchIndexMsg.GasPrice(), // gas price
+	// 	incrementBatchIndexMsg.Data(),     // data
+	// )
+	// receipt, err := applyTransaction(
+	// 	incrementBatchIndexMsg,
+	// 	p.config,
+	// 	p.bc,
+	// 	nil,
+	// 	gp,
+	// 	statedb,
+	// 	blockNumber,
+	// 	blockHash,
+	// 	incrementBatchIndexTx,
+	// 	usedGas,
+	// 	vmenv,
+	// )
+	// if err != nil {
+	// 	return nil, nil, 0, err
+	// }
+	// if receipt.Status != types.ReceiptStatusSuccessful {
+	// 	return nil, nil, 0, fmt.Errorf("batch index increment message failed")
+	// }
 
 	// check batch signature
 
@@ -295,7 +295,6 @@ func checkBatchIndex(e *vm.EVM, batchCounterContract common.Address, batchIndex 
 func makeIncrementBatchIndexMessage(blockCtx vm.BlockContext, statedb vm.StateDB, chainConfig *params.ChainConfig, config vm.Config) types.Message {
 	nonce := statedb.GetNonce(common.Address{})
 	selector := crypto.Keccak256([]byte("increment()"))[:4]
-	log.Println(chainConfig.BatchCounterAddress)
 	return types.NewMessage(
 		common.Address{},                 // from
 		&chainConfig.BatchCounterAddress, // to
