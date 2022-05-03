@@ -551,11 +551,11 @@ func TestPlaintextTx(t *testing.T) {
 		t.Fatal(err)
 	}
 	plainTxData := &types.LegacyTx{
-		Nonce: 3,
+		Nonce:    3,
 		GasPrice: common.Big0,
-		Gas: 21000,
-		To: &receiver,
-		Value: amount,
+		Gas:      21000,
+		To:       &receiver,
+		Value:    amount,
 	}
 	signedPlainTx, err := types.SignNewTx(userKey, signer, plainTxData)
 	if err != nil {
