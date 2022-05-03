@@ -236,15 +236,14 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 }
 
 func getEonKeyFromContract(e *vm.EVM, eonKeyContract common.Address, blockNumber *big.Int) ([]byte, error) {
-
-	contract := vm.AccountRef(eonKeyContract)
+	caller := vm.AccountRef(common.Address{})
 
 	selector := crypto.Keccak256([]byte("get(uint64)"))[:4]
 	// TODO: use L1 block number instead of L2 block number here
 	paddedBlk := common.BigToHash(blockNumber)
 	callData := append(selector, paddedBlk.Bytes()...)
 
-	result, _, err := e.Call(contract, eonKeyContract, callData, 1000000, common.Big0)
+	result, _, err := e.Call(caller, eonKeyContract, callData, 1000000, common.Big0)
 	if err != nil {
 		log.Printf("could not find an eon key for block number %s: %s", blockNumber, err)
 		result = []byte{}
