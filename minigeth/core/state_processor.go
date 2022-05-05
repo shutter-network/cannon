@@ -32,6 +32,7 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rlp"
+	"github.com/shutter-network/shutter/shlib/shcrypto"
 )
 
 var eonKeyStorageAbi abi.ABI
@@ -91,6 +92,12 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 		return nil, nil, 0, fmt.Errorf("first tx in block is not batch context tx")
 	}
 
+	decryptionKey := &shcrypto.EpochSecretKey{}
+	err := decryptionKey.Unmarshal(contextTx.DecryptionKey())
+	if err != nil {
+		return nil, nil, 0, fmt.Errorf("decryption key is invalid")
+	}
+
 	// check and increment batch index
 	// err := checkBatchIndex(vmenv, p.config.BatchCounterAddress, 0)
 	// if err != nil {
@@ -127,20 +134,26 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 
 	// check batch signature
 
-	// check decryption key against eon key in contract
-	if p.config.EonKeyBroadcastAddress.String() != "" {
-		decryptionKey := contextTx.DecryptionKey()
-		fmt.Println(decryptionKey)
+	// Look for the eon key in the eon key storage contract
+	blankTxContext := vm.TxContext{Origin: common.Address{}, GasPrice: common.Big0}
+	e := vm.NewEVM(blockContext, blankTxContext, statedb, p.config, cfg)
+	eonKey, err := getEonKeyFromContract(e, p.config.EonKeyBroadcastAddress, blockNumber)
+	if err != nil {
+		return nil, nil, 0, err
+	}
 
-		blankTxContext := vm.TxContext{Origin: common.Address{}, GasPrice: common.Big0}
-		e := vm.NewEVM(blockContext, blankTxContext, statedb, p.config, cfg)
-		eonKeyBytes, err := getEonKeyFromContract(e, p.config.EonKeyBroadcastAddress, blockNumber)
+	// If we found the eon key, check that the decryption key is correct and execute the encrypted
+	// transactions. If not (because the keypers have not yet published a key), don't execute the
+	// encrypted transactions.
+	if eonKey != nil {
+		var epochId uint64 = 0 // TODO: take from batch index
+		ok, err := shcrypto.VerifyEpochSecretKey(decryptionKey, eonKey, epochId)
 		if err != nil {
 			return nil, nil, 0, err
 		}
-		log.Printf("eon key from contract: %s", common.Bytes2Hex(eonKeyBytes))
-
-		// TODO: check the decryptionKey with eonKeyBytes and only continue if correct
+		if !ok {
+			return nil, nil, 0, fmt.Errorf("decryption key is not correct for epoch %d", epochId)
+		}
 
 		// execute envelopes of encrypted txs. Keep track of nonces to be used later for execution the payloads
 		feePaid := make(map[int]bool)
@@ -180,16 +193,9 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 				return nil, nil, 0, fmt.Errorf("could not extract signer of tx %d [%v]: %w", i, tx.Hash().Hex(), err)
 			}
 
-			// decryptedPayloadBytes, err := shcrypto.decrypt(tx.EncryptedPayload(), decryptionKey)
-			// if err != nil {
-			// 	fmt.Println("could not decrypt tx %d [%v]: %w", i, tx.Hash().Hex(), err)
-			// 	continue
-			// }
-			decryptedPayloadBytes := tx.EncryptedPayload()
-			var decryptedPayload types.DecryptedPayload
-			err = rlp.DecodeBytes(decryptedPayloadBytes, &decryptedPayload)
+			decryptedPayload, err := decryptPayload(tx.EncryptedPayload(), decryptionKey)
 			if err != nil {
-				fmt.Printf("could not parse decrypted tx %d [%v]: %s\n", i, tx.Hash().Hex(), err)
+				fmt.Printf("could not decrypt tx %d [%v]: %s\n", i, tx.Hash().Hex(), err)
 				statedb.SetNonce(sender, statedb.GetNonce(sender)+1)
 				continue
 			}
@@ -235,7 +241,7 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 	return receipts, allLogs, *usedGas, nil
 }
 
-func getEonKeyFromContract(e *vm.EVM, eonKeyContract common.Address, blockNumber *big.Int) ([]byte, error) {
+func getEonKeyFromContract(e *vm.EVM, eonKeyContract common.Address, blockNumber *big.Int) (*shcrypto.EonPublicKey, error) {
 	caller := vm.AccountRef(common.Address{})
 
 	selector := crypto.Keccak256([]byte("get(uint64)"))[:4]
@@ -245,28 +251,35 @@ func getEonKeyFromContract(e *vm.EVM, eonKeyContract common.Address, blockNumber
 
 	result, _, err := e.Call(caller, eonKeyContract, callData, 1000000, common.Big0)
 	if err != nil {
-		log.Printf("could not find an eon key for block number %s: %s", blockNumber, err)
-		result = []byte{}
+		log.Printf("failed to find eon key for block number %s: %s", blockNumber, err)
+		return nil, nil
+	}
+	if len(result) == 0 {
+		log.Printf("no eon key available for block number %s", blockNumber)
+		return nil, nil
 	}
 
 	// decode result with abi
-	eonKeyBytes := []byte{}
-	if len(result) != 0 {
-		decoded, err := eonKeyStorageAbi.Unpack("method", result)
-		if err != nil {
-			return nil, err
-		}
-		if len(decoded) != 1 {
-			return nil, fmt.Errorf("decoded multiple outputs with eon key storage abi")
-		}
-		var ok bool
-		eonKeyBytes, ok = decoded[0].([]byte)
-		if !ok {
-			return nil, fmt.Errorf("could not decode bytes out of eon key output")
-		}
+	decoded, err := eonKeyStorageAbi.Unpack("method", result)
+	if err != nil {
+		return nil, err
+	}
+	if len(decoded) != 1 {
+		return nil, fmt.Errorf("decoded multiple outputs with eon key storage abi")
+	}
+	var ok bool
+	eonKeyBytes, ok := decoded[0].([]byte)
+	if !ok {
+		return nil, fmt.Errorf("could not decode bytes out of eon key output")
 	}
 
-	return eonKeyBytes, nil
+	eonKey := &shcrypto.EonPublicKey{}
+	err = eonKey.Unmarshal(eonKeyBytes)
+	if err != nil {
+		return nil, err
+	}
+
+	return eonKey, nil
 }
 
 // checkBatchIndex checks that the current batch counter value equals the given batch index.
@@ -307,6 +320,26 @@ func makeIncrementBatchIndexMessage(blockCtx vm.BlockContext, statedb vm.StateDB
 		nil,                              // access list
 		false,                            // fake
 	)
+}
+
+func decryptPayload(encryptedPayloadBytes []byte, decryptionKey *shcrypto.EpochSecretKey) (*types.DecryptedPayload, error) {
+	encryptedPayload := shcrypto.EncryptedMessage{}
+	err := encryptedPayload.Unmarshal(encryptedPayloadBytes)
+	if err != nil {
+		return nil, err
+	}
+
+	decryptedPayloadBytes, err := encryptedPayload.Decrypt(decryptionKey)
+	if err != nil {
+		return nil, err
+	}
+
+	var decryptedPayload types.DecryptedPayload
+	err = rlp.DecodeBytes(decryptedPayloadBytes, &decryptedPayload)
+	if err != nil {
+		return nil, err
+	}
+	return &decryptedPayload, nil
 }
 
 func applyTransaction(msg types.Message, config *params.ChainConfig, bc ChainContext, author *common.Address, gp *GasPool, statedb *state.StateDB, blockNumber *big.Int, blockHash common.Hash, tx *types.Transaction, usedGas *uint64, evm *vm.EVM) (*types.Receipt, error) {
