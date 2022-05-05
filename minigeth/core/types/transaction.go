@@ -45,8 +45,8 @@ const (
 	LegacyTxType = iota
 	AccessListTxType
 	DynamicFeeTxType
-	ShutterTxType      = 0x50
-	BatchContextTxType = 0x5a
+	ShutterTxType = 0x50
+	BatchTxType   = 0x5a
 )
 
 // Transaction is an Ethereum transaction.
@@ -84,11 +84,11 @@ type TxData interface {
 	value() *big.Int
 	nonce() uint64
 	to() *common.Address
-	encryptedPayload() []byte
-	decryptionKey() []byte
 
 	rawSignatureValues() (v, r, s *big.Int)
 	setSignatureValues(chainID, v, r, s *big.Int)
+
+	TxDataExtension
 }
 
 // EncodeRLP implements rlp.Encoder
@@ -194,8 +194,8 @@ func (tx *Transaction) decodeTyped(b []byte) (TxData, error) {
 		var inner ShutterTx
 		err := rlp.DecodeBytes(b[1:], &inner)
 		return &inner, err
-	case BatchContextTxType:
-		var inner BatchContextTx
+	case BatchTxType:
+		var inner BatchTx
 		err := rlp.DecodeBytes(b[1:], &inner)
 		return &inner, err
 	default:
@@ -310,6 +310,19 @@ func (tx *Transaction) EncryptedPayload() []byte { return tx.inner.encryptedPayl
 
 // DecryptionKey returns the decryption key of a decryption key transaction.
 func (tx *Transaction) DecryptionKey() []byte { return tx.inner.decryptionKey() }
+
+// BatchIndex returns the batch index (a.k.a sequence number) of a Shutter transaction,
+func (tx *Transaction) BatchIndex() uint64 { return tx.inner.batchIndex() }
+
+// L1BlockNumber returns the Layer 1 block number used for identifying the
+// collator/keyper config
+func (tx *Transaction) L1BlockNumber() *big.Int { return tx.inner.l1BlockNumber() }
+
+// Timestamp returns the timestamp ()
+func (tx *Transaction) Timestamp() *big.Int { return tx.inner.timestamp() }
+
+// Transactions returns the list of RLP-byte serialised ShutterTxs and plaintext txs included in the batch
+func (tx *Transaction) Transactions() [][]byte { return tx.inner.transactions() }
 
 // Cost returns gas * gasPrice + value.
 func (tx *Transaction) Cost() *big.Int {
