@@ -30,10 +30,13 @@ var (
 	genesisHash = common.HexToHash("0xd702d0441aa0045ac875b526e6ea7064e67604ef2162034a9b7260540f3e9f25")
 	signer      types.Signer
 
-	sequencerKey       *ecdsa.PrivateKey
-	sequencerAddress   common.Address
-	userKey            *ecdsa.PrivateKey
-	userAddress        common.Address
+	deployerKey      *ecdsa.PrivateKey
+	deployerAddress  common.Address
+	sequencerKey     *ecdsa.PrivateKey
+	sequencerAddress common.Address
+	userKey          *ecdsa.PrivateKey
+	userAddress      common.Address
+
 	contractDeployData = common.Hex2Bytes("608060405234801561001057600080fd5b5061012f806100206000396000f3fe6080604052348015600f57600080fd5b506004361060325760003560e01c806367e0badb146037578063cd16ecbf146051575b600080fd5b603d6069565b6040516048919060c2565b60405180910390f35b6067600480360381019060639190608f565b6072565b005b60008054905090565b8060008190555050565b60008135905060898160e5565b92915050565b60006020828403121560a057600080fd5b600060ac84828501607c565b91505092915050565b60bc8160db565b82525050565b600060208201905060d5600083018460b5565b92915050565b6000819050919050565b60ec8160db565b811460f657600080fd5b5056fea2646970667358221220f8b1948f74d297fafd90786c1af95e17b6a57ed35fbb91db4ccbaaf5711c59c864736f6c63430008040033")
 	contractCallData   = common.Hex2Bytes("cd16ecbf0000000000000000000000000000000000000000000000000000000000000001")
 
@@ -49,12 +52,15 @@ var (
 )
 
 func init() {
-	sequencerKey, _ = crypto.HexToECDSA("0000000000000000000000000000000000000000000000000000000000000001")
+	deployerKey, _ = crypto.HexToECDSA("0000000000000000000000000000000000000000000000000000000000000001")
+	deployerAddress = crypto.PubkeyToAddress(deployerKey.PublicKey)
+	sequencerKey, _ = crypto.HexToECDSA("0000000000000000000000000000000000000000000000000000000000000002")
 	sequencerAddress = crypto.PubkeyToAddress(sequencerKey.PublicKey)
 	userKey, _ = crypto.HexToECDSA("b0057716d5917badaf911b193b12b910811c1497b5bada8d7711f758981c3773")
 	userAddress = crypto.PubkeyToAddress(userKey.PublicKey)
-	config.EonKeyBroadcastAddress = common.HexToAddress("0x07a457d878BF363E0Bb5aa0B096092f941e19962")
+
 	config.BatchCounterAddress = batchCounterAddress
+	// address of other contracts set after deployment in prepare
 
 	oracle.SetNodeUrl(nodeUrl)
 
@@ -106,8 +112,10 @@ func prepare(t *testing.T) (types.Header, *state.StateDB) {
 		t.Fatal(err)
 	}
 
-	statedb.SetCode(batchCounterAddress, batchCounterDeployedBytecode)
+	statedb.SetBalance(deployerAddress, big.NewInt(1000000000000000000))
 	statedb.SetBalance(userAddress, big.NewInt(1000000000000000000))
+
+	statedb.SetCode(batchCounterAddress, batchCounterDeployedBytecode)
 
 	deployEonKey(t, parent, statedb)
 
@@ -143,7 +151,7 @@ func deployEonKey(t *testing.T, parent types.Header, statedb *state.StateDB) {
 
 	unsignedDeployTx := &types.DynamicFeeTx{
 		ChainID:   config.ChainID,
-		Nonce:     statedb.GetNonce(userAddress),
+		Nonce:     statedb.GetNonce(deployerAddress),
 		GasTipCap: common.Big0,
 		GasFeeCap: big.NewInt(875000000),
 		Gas:       10000000,
@@ -151,7 +159,7 @@ func deployEonKey(t *testing.T, parent types.Header, statedb *state.StateDB) {
 		Value:     common.Big0,
 		Data:      deployEonKeyStorageData,
 	}
-	deployTx, err := types.SignNewTx(userKey, signer, unsignedDeployTx)
+	deployTx, err := types.SignNewTx(deployerKey, signer, unsignedDeployTx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -168,7 +176,7 @@ func deployEonKey(t *testing.T, parent types.Header, statedb *state.StateDB) {
 	// insert new key to eon key storage with value "0x123456789a"
 	unsignedInsertTx := &types.DynamicFeeTx{
 		ChainID:   config.ChainID,
-		Nonce:     statedb.GetNonce(userAddress),
+		Nonce:     statedb.GetNonce(deployerAddress),
 		GasTipCap: common.Big0,
 		GasFeeCap: big.NewInt(875000000),
 		Gas:       10000000,
@@ -176,7 +184,7 @@ func deployEonKey(t *testing.T, parent types.Header, statedb *state.StateDB) {
 		Value:     common.Big0,
 		Data:      insertEonKeyCalldata,
 	}
-	insertTx, err := types.SignNewTx(userKey, signer, unsignedInsertTx)
+	insertTx, err := types.SignNewTx(deployerKey, signer, unsignedInsertTx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -380,7 +388,7 @@ func TestTransfer(t *testing.T) {
 	}
 	unsignedShutterTx := &types.ShutterTx{
 		ChainID:          config.ChainID,
-		Nonce:            2,
+		Nonce:            statedb.GetNonce(userAddress),
 		GasTipCap:        big.NewInt(0),
 		GasFeeCap:        big.NewInt(0),
 		Gas:              21000,
@@ -437,7 +445,7 @@ func TestContractCall(t *testing.T) {
 	}
 	unsignedDeployTx := &types.ShutterTx{
 		ChainID:          config.ChainID,
-		Nonce:            2,
+		Nonce:            statedb.GetNonce(userAddress),
 		GasTipCap:        big.NewInt(0),
 		GasFeeCap:        big.NewInt(0),
 		Gas:              1000000,
@@ -453,7 +461,7 @@ func TestContractCall(t *testing.T) {
 	}
 	unsignedCallTx := &types.ShutterTx{
 		ChainID:          config.ChainID,
-		Nonce:            3,
+		Nonce:            statedb.GetNonce(userAddress) + 1,
 		GasTipCap:        big.NewInt(0),
 		GasFeeCap:        big.NewInt(0),
 		Gas:              100000,
@@ -499,7 +507,7 @@ func TestContractDeployment(t *testing.T) {
 	}
 	unsignedShutterTx := &types.ShutterTx{
 		ChainID:          config.ChainID,
-		Nonce:            2,
+		Nonce:            statedb.GetNonce(userAddress),
 		GasTipCap:        big.NewInt(0),
 		GasFeeCap:        big.NewInt(0),
 		Gas:              1000000,
@@ -558,7 +566,7 @@ func TestPlaintextTx(t *testing.T) {
 	}
 	unsignedShutterTx := &types.ShutterTx{
 		ChainID:          config.ChainID,
-		Nonce:            2,
+		Nonce:            statedb.GetNonce(userAddress),
 		GasTipCap:        big.NewInt(0),
 		GasFeeCap:        big.NewInt(0),
 		Gas:              21000,
@@ -569,7 +577,7 @@ func TestPlaintextTx(t *testing.T) {
 		t.Fatal(err)
 	}
 	unsignedPlainTx := &types.LegacyTx{
-		Nonce:    3,
+		Nonce:    statedb.GetNonce(userAddress) + 1,
 		GasPrice: common.Big0,
 		Gas:      21000,
 		To:       &receiver,
