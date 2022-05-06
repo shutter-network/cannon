@@ -4,6 +4,7 @@
 package core
 
 import (
+	"bytes"
 	"crypto/ecdsa"
 	"crypto/rand"
 	"math/big"
@@ -109,14 +110,34 @@ func prepare(t *testing.T) (types.Header, *state.StateDB) {
 	return parent, statedb
 }
 
+func makeBatchTx(t *testing.T, batchIndex uint64, transactions []*types.Transaction) *types.Transaction {
+	txBytes := [][]byte{}
+	for _, tx := range transactions {
+		b, err := tx.MarshalBinary()
+		if err != nil {
+			t.Fatal(err)
+		}
+		txBytes = append(txBytes, b)
+	}
+	unsignedBatchTx := types.BatchTx{
+		ChainID:       config.ChainID,
+		DecryptionKey: decryptionKeys[batchIndex].Marshal(),
+		BatchIndex:    batchIndex,
+		L1BlockNumber: common.Big0,
+		Timestamp:     common.Big0,
+		Transactions:  txBytes,
+	}
+	signer := types.LatestSigner(config)
+	batchTx, err := types.SignNewTx(sequencerKey, signer, &unsignedBatchTx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return batchTx
+}
+
 func deployEonKey(t *testing.T, parent types.Header, statedb *state.StateDB) {
 	t.Helper()
 	signer := types.LatestSigner(config)
-
-	contextTx := &types.BatchContextTx{
-		ChainID:       config.ChainID,
-		DecryptionKey: decryptionKeys[0].Marshal(),
-	}
 
 	unsignedDeployTx := &types.DynamicFeeTx{
 		ChainID:   config.ChainID,
@@ -132,11 +153,8 @@ func deployEonKey(t *testing.T, parent types.Header, statedb *state.StateDB) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	transactions := []*types.Transaction{
-		types.NewTx(contextTx),
-		deployTx,
-	}
-	deployReceipts, _, _, err := process(t, parent, statedb, transactions)
+	deployBatchTx := makeBatchTx(t, 0, []*types.Transaction{deployTx})
+	deployReceipts, _, _, err := processBatchTx(t, parent, statedb, deployBatchTx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -160,11 +178,8 @@ func deployEonKey(t *testing.T, parent types.Header, statedb *state.StateDB) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	transactions = []*types.Transaction{
-		types.NewTx(contextTx),
-		insertTx,
-	}
-	insertReceipts, _, _, err := process(t, parent, statedb, transactions)
+	insertBatchTx := makeBatchTx(t, 1, []*types.Transaction{insertTx})
+	insertReceipts, _, _, err := processBatchTx(t, parent, statedb, insertBatchTx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -173,8 +188,12 @@ func deployEonKey(t *testing.T, parent types.Header, statedb *state.StateDB) {
 	}
 }
 
-func process(t *testing.T, parent types.Header, statedb *state.StateDB, transactions []*types.Transaction) (types.Receipts, []*types.Log, uint64, error) {
+func processBatchTx(t *testing.T, parent types.Header, statedb *state.StateDB, batchTx *types.Transaction) (types.Receipts, []*types.Log, uint64, error) {
 	t.Helper()
+
+	if batchTx.Type() != types.BatchTxType {
+		t.Fatal("got non batch tx")
+	}
 
 	vmconfig := vm.Config{NoBaseFee: true}
 	bc := NewBlockChain(&parent)
@@ -198,7 +217,7 @@ func process(t *testing.T, parent types.Header, statedb *state.StateDB, transact
 
 		BaseFee: misc.CalcBaseFee(config, &parent),
 	}
-	block := types.NewBlock(&header, transactions, nil, nil, trie.NewStackTrie(nil))
+	block := types.NewBlock(&header, []*types.Transaction{batchTx}, nil, nil, trie.NewStackTrie(nil))
 
 	processor := NewStateProcessor(config, bc, bc.Engine())
 	receipts, logs, gasUsed, err := processor.Process(block, statedb, vmconfig)
@@ -223,335 +242,134 @@ func encryptPayload(t *testing.T, payload *types.DecryptedPayload, batchIndex ui
 	return encryptedPayload.Marshal()
 }
 
-// func TestEmptyBlock(t *testing.T) {
-// 	parent, statedb := prepare(t)
-// 	transactions := []*types.Transaction{}
-// 	_, _, _, err := process(t, parent, statedb, transactions)
-// 	t.Log(err)
-// 	if err == nil {
-// 		t.Fatal()
-// 	}
-// }
-
-// func TestOnlyDecryptionKey(t *testing.T) {
-// 	parent, statedb := prepare(t)
-// 	transactions := []*types.Transaction{
-// 		types.NewTx(&types.BatchContextTx{
-// 			ChainID:       config.ChainID,
-// 			DecryptionKey: decryptionKeys[0].Marshal(),
-// 		}),
-// 	}
-// 	receipts, logs, gasUsed, err := process(t, parent, statedb, transactions)
-// 	if err != nil {
-// 		t.Fatal(err)
-// 	}
-// 	if len(receipts) != 0 {
-// 		t.Fatal("expected 0 receipts")
-// 	}
-// 	if len(logs) != 0 {
-// 		t.Fatal("expected 0 logs")
-// 	}
-// 	if gasUsed > 0 {
-// 		t.Fatal("expected 0 gas used")
-// 	}
-// }
-
-// func TestEmptyShutterTx(t *testing.T) {
-// 	parent, statedb := prepare(t)
-// 	contextTx := &types.BatchContextTx{
-// 		ChainID:       config.ChainID,
-// 		DecryptionKey: decryptionKeys[0].Marshal(),
-// 	}
-// 	shutterTx := &types.ShutterTx{
-// 		ChainID:          config.ChainID,
-// 		Nonce:            0,
-// 		GasTipCap:        big.NewInt(0),
-// 		GasFeeCap:        big.NewInt(0),
-// 		Gas:              0,
-// 		EncryptedPayload: []byte{},
-// 	}
-// 	signer := types.LatestSigner(config)
-// 	signedTx, err := types.SignNewTx(userKey, signer, shutterTx)
-// 	if err != nil {
-// 		t.Fatal(err)
-// 	}
-// 	transactions := []*types.Transaction{
-// 		types.NewTx(contextTx),
-// 		signedTx,
-// 	}
-
-// 	receipts, logs, gasUsed, err := process(t, parent, statedb, transactions)
-// 	if err != nil {
-// 		t.Fatal(err)
-// 	}
-// 	if len(receipts) != 0 {
-// 		t.Fatal("expected 0 receipts")
-// 	}
-// 	if len(logs) != 0 {
-// 		t.Fatal("expected 0 logs")
-// 	}
-// 	if gasUsed != 0 {
-// 		t.Fatal("expected 0 gas used")
-// 	}
-// }
-
-// func TestEmptyShutterTxWithFee(t *testing.T) {
-// 	parent, statedb := prepare(t)
-// 	contextTx := &types.BatchContextTx{
-// 		ChainID:       config.ChainID,
-// 		DecryptionKey: decryptionKeys[0].Marshal(),
-// 	}
-// 	shutterTx := &types.ShutterTx{
-// 		ChainID:          config.ChainID,
-// 		Nonce:            0,
-// 		GasTipCap:        big.NewInt(0),
-// 		GasFeeCap:        big.NewInt(500), // much smaller than base fee
-// 		Gas:              100,
-// 		EncryptedPayload: []byte{},
-// 	}
-// 	signer := types.LatestSigner(config)
-// 	signedTx, err := types.SignNewTx(userKey, signer, shutterTx)
-// 	if err != nil {
-// 		t.Fatal(err)
-// 	}
-// 	transactions := []*types.Transaction{
-// 		types.NewTx(contextTx),
-// 		signedTx,
-// 	}
-// 	userBalancePre := statedb.GetBalance(userAddress)
-
-// 	receipts, logs, gasUsed, err := process(t, parent, statedb, transactions)
-// 	if err != nil {
-// 		t.Fatal(err)
-// 	}
-// 	if len(receipts) != 0 {
-// 		t.Fatal("expected 0 receipts")
-// 	}
-// 	if len(logs) != 0 {
-// 		t.Fatal("expected 0 logs")
-// 	}
-// 	if gasUsed != 0 {
-// 		t.Fatal("expected 0 gas used")
-// 	}
-
-// 	userBalancePost := statedb.GetBalance(userAddress)
-// 	userBalanceDiff := new(big.Int).Sub(userBalancePost, userBalancePre)
-
-// 	expectedFee := new(big.Int).Mul(shutterTx.GasFeeCap, new(big.Int).SetUint64(shutterTx.Gas))
-// 	if new(big.Int).Neg(userBalanceDiff).Cmp(expectedFee) != 0 {
-// 		t.Fatalf("expected user balance to increase by %d, got %d", expectedFee, new(big.Int).Neg(userBalanceDiff))
-// 	}
-// }
-
-// func TestTransfer(t *testing.T) {
-// 	parent, statedb := prepare(t)
-// 	contextTx := &types.BatchContextTx{
-// 		ChainID:       config.ChainID,
-// 		DecryptionKey: decryptionKeys[0].Marshal(),
-// 	}
-
-// 	receiver := common.HexToAddress("2222222222222222222222222222222222222222")
-// 	amount := big.NewInt(100)
-// 	payload := &types.DecryptedPayload{
-// 		To:    &receiver,
-// 		Value: amount,
-// 		Data:  []byte{},
-// 	}
-// 	shutterTx := &types.ShutterTx{
-// 		ChainID:          config.ChainID,
-// 		Nonce:            2,
-// 		GasTipCap:        big.NewInt(0),
-// 		GasFeeCap:        big.NewInt(0),
-// 		Gas:              21000,
-// 		EncryptedPayload: encryptPayload(t, payload, 0),
-// 	}
-// 	signer := types.LatestSigner(config)
-// 	signedTx, err := types.SignNewTx(userKey, signer, shutterTx)
-// 	if err != nil {
-// 		t.Fatal(err)
-// 	}
-// 	transactions := []*types.Transaction{
-// 		types.NewTx(contextTx),
-// 		signedTx,
-// 	}
-
-// 	senderBalancePre := statedb.GetBalance(userAddress)
-// 	receiverBalancePre := statedb.GetBalance(receiver)
-
-// 	receipts, logs, gasUsed, err := process(t, parent, statedb, transactions)
-// 	if err != nil {
-// 		t.Fatal(err)
-// 	}
-// 	if len(receipts) != 1 {
-// 		t.Fatal("expected 1 receipt")
-// 	}
-// 	if receipts[0].Status != types.ReceiptStatusSuccessful {
-// 		t.Fatal("tx should have been successful")
-// 	}
-// 	if len(logs) != 0 {
-// 		t.Fatal("expected 0 logs")
-// 	}
-// 	if gasUsed != 21000 {
-// 		t.Fatalf("expected 21000 gas used, got %d", gasUsed)
-// 	}
-
-// 	senderBalancePost := statedb.GetBalance(userAddress)
-// 	receiverBalancePost := statedb.GetBalance(receiver)
-
-// 	senderBalanceDiff := new(big.Int).Sub(senderBalancePost, senderBalancePre)
-// 	receiverBalanceDiff := new(big.Int).Sub(receiverBalancePost, receiverBalancePre)
-
-// 	if senderBalanceDiff.Cmp(new(big.Int).Neg(amount)) != 0 {
-// 		t.Fatalf("expected sender balance to decrease by %d, got increase by %d", amount, senderBalanceDiff)
-// 	}
-// 	if receiverBalanceDiff.Cmp(amount) != 0 {
-// 		t.Fatalf("expected receiver balance to increase by %d, got %d", amount, receiverBalanceDiff)
-// 	}
-// }
-
-// func TestContractCall(t *testing.T) {
-// 	parent, statedb := prepare(t)
-// 	contextTx := &types.BatchContextTx{
-// 		ChainID:       config.ChainID,
-// 		DecryptionKey: decryptionKeys[0].Marshal(),
-// 	}
-
-// 	deployPayload := &types.DecryptedPayload{
-// 		To:    nil,
-// 		Value: big.NewInt(0),
-// 		Data:  contractDeployData,
-// 	}
-// 	deployTx := &types.ShutterTx{
-// 		ChainID:          config.ChainID,
-// 		Nonce:            2,
-// 		GasTipCap:        big.NewInt(0),
-// 		GasFeeCap:        big.NewInt(0),
-// 		Gas:              1000000,
-// 		EncryptedPayload: encryptPayload(t, deployPayload, 0),
-// 	}
-
-// 	contractAddress := common.HexToAddress("0xFA33c8EF8b5c4f3003361c876a298D1DB61ccA4e")
-// 	callPayload := &types.DecryptedPayload{
-// 		To:    &contractAddress,
-// 		Value: big.NewInt(0),
-// 		Data:  contractCallData,
-// 	}
-// 	callTx := &types.ShutterTx{
-// 		ChainID:          config.ChainID,
-// 		Nonce:            3,
-// 		GasTipCap:        big.NewInt(0),
-// 		GasFeeCap:        big.NewInt(0),
-// 		Gas:              100000,
-// 		EncryptedPayload: encryptPayload(t, callPayload, 0),
-// 	}
-
-// 	signer := types.LatestSigner(config)
-// 	signedDeployTx, err := types.SignNewTx(userKey, signer, deployTx)
-// 	if err != nil {
-// 		t.Fatal(err)
-// 	}
-// 	signedCallTx, err := types.SignNewTx(userKey, signer, callTx)
-// 	if err != nil {
-// 		t.Fatal(err)
-// 	}
-// 	transactions := []*types.Transaction{
-// 		types.NewTx(contextTx),
-// 		signedDeployTx,
-// 		signedCallTx,
-// 	}
-
-// 	receipts, logs, _, err := process(t, parent, statedb, transactions)
-// 	if err != nil {
-// 		t.Fatal(err)
-// 	}
-// 	log.Println("receipts", receipts)
-// 	if len(receipts) != 2 {
-// 		t.Fatal("expected 2 receipts")
-// 	}
-// 	if receipts[1].Status != types.ReceiptStatusSuccessful {
-// 		t.Fatal("tx should have been successful")
-// 	}
-// 	if len(logs) != 0 {
-// 		t.Fatal("expected 0 logs")
-// 	}
-// }
-
-// func TestContractDeployment(t *testing.T) {
-// 	parent, statedb := prepare(t)
-// 	contextTx := &types.BatchContextTx{
-// 		ChainID:       config.ChainID,
-// 		DecryptionKey: decryptionKeys[0].Marshal(),
-// 	}
-
-// 	payload := &types.DecryptedPayload{
-// 		To:    nil,
-// 		Value: big.NewInt(0),
-// 		Data:  contractDeployData,
-// 	}
-// 	shutterTx := &types.ShutterTx{
-// 		ChainID:          config.ChainID,
-// 		Nonce:            2,
-// 		GasTipCap:        big.NewInt(0),
-// 		GasFeeCap:        big.NewInt(0),
-// 		Gas:              1000000,
-// 		EncryptedPayload: encryptPayload(t, payload, 0),
-// 	}
-// 	signer := types.LatestSigner(config)
-// 	signedTx, err := types.SignNewTx(userKey, signer, shutterTx)
-// 	if err != nil {
-// 		t.Fatal(err)
-// 	}
-// 	transactions := []*types.Transaction{
-// 		types.NewTx(contextTx),
-// 		signedTx,
-// 	}
-
-// 	receipts, logs, _, err := process(t, parent, statedb, transactions)
-// 	if err != nil {
-// 		t.Fatal(err)
-// 	}
-// 	if len(receipts) != 1 {
-// 		t.Fatal("expected 1 receipts")
-// 	}
-// 	if receipts[0].Status != types.ReceiptStatusSuccessful {
-// 		t.Fatal("tx should have been successful")
-// 	}
-// 	if bytes.Equal(receipts[0].ContractAddress.Bytes(), common.Address{}.Bytes()) {
-// 		t.Fatal("should have deployed contract")
-// 	}
-// 	if len(logs) != 0 {
-// 		t.Fatal("expected 0 logs")
-// 	}
-
-// 	code := statedb.GetCode(receipts[0].ContractAddress)
-// 	if len(code) == 0 {
-// 		t.Fatal("should have deployed contract")
-// 	}
-// }
-
-// func TestGetEonKey(t *testing.T) {
-// 	parent, statedb := prepare(t)
-
-// 	// mine empty block to test the verification of eon key
-// 	transactions := []*types.Transaction{
-// 		types.NewTx(&types.BatchContextTx{
-// 			ChainID:       config.ChainID,
-// 			DecryptionKey: decryptionKeys[0].Marshal(),
-// 		}),
-// 	}
-// 	_, _, _, err := process(t, parent, statedb, transactions)
-// 	if err != nil {
-// 		t.Fatal(err)
-// 	}
-// }
-
-func TestPlaintextTx(t *testing.T) {
-	// Tests that a plaintext tx is properly executed after a ciphertext tx
+func TestEmptyBlock(t *testing.T) {
 	parent, statedb := prepare(t)
-	contextTx := &types.BatchContextTx{
-		ChainID:       config.ChainID,
-		DecryptionKey: decryptionKeys[0].Marshal(),
+	vmconfig := vm.Config{NoBaseFee: true}
+	bc := NewBlockChain(&parent)
+
+	header := types.Header{
+		ParentHash: parent.Hash(),
+		// UncleHash   common.Hash
+		Coinbase: sequencerAddress,
+		// Root        common.Hash
+		// TxHash      common.Hash
+		// ReceiptHash common.Hash
+		Bloom:      parent.Bloom,
+		Difficulty: parent.Difficulty,
+		Number:     new(big.Int).Add(parent.Number, big.NewInt(1)),
+		GasLimit:   parent.GasLimit,
+		// GasUsed     uint64
+		Time:      parent.Time,
+		Extra:     []byte{},
+		MixDigest: common.Hash{},
+		Nonce:     types.BlockNonce{},
+
+		BaseFee: misc.CalcBaseFee(config, &parent),
 	}
+	block := types.NewBlock(&header, []*types.Transaction{}, nil, nil, trie.NewStackTrie(nil))
+
+	processor := NewStateProcessor(config, bc, bc.Engine())
+	_, _, _, err := processor.Process(block, statedb, vmconfig)
+	if err == nil {
+		t.Fatal()
+	}
+}
+
+func TestEmptyBatch(t *testing.T) {
+	parent, statedb := prepare(t)
+	batchTx := makeBatchTx(t, 2, []*types.Transaction{})
+	receipts, logs, gasUsed, err := processBatchTx(t, parent, statedb, batchTx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(receipts) != 0 {
+		t.Fatal("expected 0 receipts")
+	}
+	if len(logs) != 0 {
+		t.Fatal("expected 0 logs")
+	}
+	if gasUsed > 0 {
+		t.Fatal("expected 0 gas used")
+	}
+}
+
+func TestEmptyShutterTx(t *testing.T) {
+	parent, statedb := prepare(t)
+	unsignedShutterTx := &types.ShutterTx{
+		ChainID:          config.ChainID,
+		Nonce:            0,
+		GasTipCap:        big.NewInt(0),
+		GasFeeCap:        big.NewInt(0),
+		Gas:              0,
+		EncryptedPayload: []byte{},
+		BatchIndex:       2,
+	}
+	signer := types.LatestSigner(config)
+	shutterTx, err := types.SignNewTx(userKey, signer, unsignedShutterTx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	batchTx := makeBatchTx(t, 2, []*types.Transaction{shutterTx})
+
+	receipts, logs, gasUsed, err := processBatchTx(t, parent, statedb, batchTx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(receipts) != 0 {
+		t.Fatal("expected 0 receipts")
+	}
+	if len(logs) != 0 {
+		t.Fatal("expected 0 logs")
+	}
+	if gasUsed != 0 {
+		t.Fatal("expected 0 gas used")
+	}
+}
+
+func TestEmptyShutterTxWithFee(t *testing.T) {
+	parent, statedb := prepare(t)
+	unsignedShutterTx := &types.ShutterTx{
+		ChainID:          config.ChainID,
+		Nonce:            0,
+		GasTipCap:        big.NewInt(0),
+		GasFeeCap:        big.NewInt(500), // much smaller than base fee
+		Gas:              100,
+		EncryptedPayload: []byte{},
+		BatchIndex:       2,
+	}
+	signer := types.LatestSigner(config)
+	shutterTx, err := types.SignNewTx(userKey, signer, unsignedShutterTx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	batchTx := makeBatchTx(t, 2, []*types.Transaction{shutterTx})
+	userBalancePre := statedb.GetBalance(userAddress)
+
+	receipts, logs, gasUsed, err := processBatchTx(t, parent, statedb, batchTx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(receipts) != 0 {
+		t.Fatal("expected 0 receipts")
+	}
+	if len(logs) != 0 {
+		t.Fatal("expected 0 logs")
+	}
+	if gasUsed != 0 {
+		t.Fatal("expected 0 gas used")
+	}
+
+	userBalancePost := statedb.GetBalance(userAddress)
+	userBalanceDiff := new(big.Int).Sub(userBalancePost, userBalancePre)
+
+	expectedFee := new(big.Int).Mul(shutterTx.GasFeeCap(), new(big.Int).SetUint64(shutterTx.Gas()))
+	if new(big.Int).Neg(userBalanceDiff).Cmp(expectedFee) != 0 {
+		t.Fatalf("expected user balance to increase by %d, got %d", expectedFee, new(big.Int).Neg(userBalanceDiff))
+	}
+}
+
+func TestTransfer(t *testing.T) {
+	parent, statedb := prepare(t)
 
 	receiver := common.HexToAddress("2222222222222222222222222222222222222222")
 	amount := big.NewInt(100)
@@ -560,41 +378,217 @@ func TestPlaintextTx(t *testing.T) {
 		Value: amount,
 		Data:  []byte{},
 	}
-	shutterTx := &types.ShutterTx{
+	unsignedShutterTx := &types.ShutterTx{
 		ChainID:          config.ChainID,
 		Nonce:            2,
 		GasTipCap:        big.NewInt(0),
 		GasFeeCap:        big.NewInt(0),
 		Gas:              21000,
-		EncryptedPayload: encryptPayload(t, payload, 0),
+		EncryptedPayload: encryptPayload(t, payload, 2),
+		BatchIndex:       2,
 	}
 	signer := types.LatestSigner(config)
-	signedTx, err := types.SignNewTx(userKey, signer, shutterTx)
+	shutterTx, err := types.SignNewTx(userKey, signer, unsignedShutterTx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	plainTxData := &types.LegacyTx{
+	batchTx := makeBatchTx(t, 2, []*types.Transaction{shutterTx})
+
+	senderBalancePre := statedb.GetBalance(userAddress)
+	receiverBalancePre := statedb.GetBalance(receiver)
+
+	receipts, logs, gasUsed, err := processBatchTx(t, parent, statedb, batchTx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(receipts) != 1 {
+		t.Fatal("expected 1 receipt")
+	}
+	if receipts[0].Status != types.ReceiptStatusSuccessful {
+		t.Fatal("tx should have been successful")
+	}
+	if len(logs) != 0 {
+		t.Fatal("expected 0 logs")
+	}
+	if gasUsed != 21000 {
+		t.Fatalf("expected 21000 gas used, got %d", gasUsed)
+	}
+
+	senderBalancePost := statedb.GetBalance(userAddress)
+	receiverBalancePost := statedb.GetBalance(receiver)
+
+	senderBalanceDiff := new(big.Int).Sub(senderBalancePost, senderBalancePre)
+	receiverBalanceDiff := new(big.Int).Sub(receiverBalancePost, receiverBalancePre)
+
+	if senderBalanceDiff.Cmp(new(big.Int).Neg(amount)) != 0 {
+		t.Fatalf("expected sender balance to decrease by %d, got increase by %d", amount, senderBalanceDiff)
+	}
+	if receiverBalanceDiff.Cmp(amount) != 0 {
+		t.Fatalf("expected receiver balance to increase by %d, got %d", amount, receiverBalanceDiff)
+	}
+}
+
+func TestContractCall(t *testing.T) {
+	parent, statedb := prepare(t)
+
+	deployPayload := &types.DecryptedPayload{
+		To:    nil,
+		Value: big.NewInt(0),
+		Data:  contractDeployData,
+	}
+	unsignedDeployTx := &types.ShutterTx{
+		ChainID:          config.ChainID,
+		Nonce:            2,
+		GasTipCap:        big.NewInt(0),
+		GasFeeCap:        big.NewInt(0),
+		Gas:              1000000,
+		EncryptedPayload: encryptPayload(t, deployPayload, 2),
+		BatchIndex:       2,
+	}
+
+	contractAddress := common.HexToAddress("0xFA33c8EF8b5c4f3003361c876a298D1DB61ccA4e")
+	callPayload := &types.DecryptedPayload{
+		To:    &contractAddress,
+		Value: big.NewInt(0),
+		Data:  contractCallData,
+	}
+	unsignedCallTx := &types.ShutterTx{
+		ChainID:          config.ChainID,
+		Nonce:            3,
+		GasTipCap:        big.NewInt(0),
+		GasFeeCap:        big.NewInt(0),
+		Gas:              100000,
+		EncryptedPayload: encryptPayload(t, callPayload, 2),
+		BatchIndex:       2,
+	}
+
+	signer := types.LatestSigner(config)
+	deployTx, err := types.SignNewTx(userKey, signer, unsignedDeployTx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	callTx, err := types.SignNewTx(userKey, signer, unsignedCallTx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	batchTx := makeBatchTx(t, 2, []*types.Transaction{
+		deployTx,
+		callTx,
+	})
+
+	receipts, logs, _, err := processBatchTx(t, parent, statedb, batchTx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(receipts) != 2 {
+		t.Fatal("expected 2 receipts")
+	}
+	if receipts[1].Status != types.ReceiptStatusSuccessful {
+		t.Fatal("tx should have been successful")
+	}
+	if len(logs) != 0 {
+		t.Fatal("expected 0 logs")
+	}
+}
+
+func TestContractDeployment(t *testing.T) {
+	parent, statedb := prepare(t)
+
+	payload := &types.DecryptedPayload{
+		To:    nil,
+		Value: big.NewInt(0),
+		Data:  contractDeployData,
+	}
+	unsignedShutterTx := &types.ShutterTx{
+		ChainID:          config.ChainID,
+		Nonce:            2,
+		GasTipCap:        big.NewInt(0),
+		GasFeeCap:        big.NewInt(0),
+		Gas:              1000000,
+		EncryptedPayload: encryptPayload(t, payload, 2),
+		BatchIndex:       2,
+	}
+	signer := types.LatestSigner(config)
+	shutterTx, err := types.SignNewTx(userKey, signer, unsignedShutterTx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	batchTx := makeBatchTx(t, 2, []*types.Transaction{shutterTx})
+
+	receipts, logs, _, err := processBatchTx(t, parent, statedb, batchTx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(receipts) != 1 {
+		t.Fatal("expected 1 receipts")
+	}
+	if receipts[0].Status != types.ReceiptStatusSuccessful {
+		t.Fatal("tx should have been successful")
+	}
+	if bytes.Equal(receipts[0].ContractAddress.Bytes(), common.Address{}.Bytes()) {
+		t.Fatal("should have deployed contract")
+	}
+	if len(logs) != 0 {
+		t.Fatal("expected 0 logs")
+	}
+
+	code := statedb.GetCode(receipts[0].ContractAddress)
+	if len(code) == 0 {
+		t.Fatal("should have deployed contract")
+	}
+}
+
+func TestGetEonKey(t *testing.T) {
+	parent, statedb := prepare(t)
+
+	// mine empty block to test the verification of eon key
+	_, _, _, err := processBatchTx(t, parent, statedb, makeBatchTx(t, 2, []*types.Transaction{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPlaintextTx(t *testing.T) {
+	// Tests that a plaintext tx is properly executed after a ciphertext tx
+	parent, statedb := prepare(t)
+
+	receiver := common.HexToAddress("2222222222222222222222222222222222222222")
+	amount := big.NewInt(100)
+	payload := &types.DecryptedPayload{
+		To:    &receiver,
+		Value: amount,
+		Data:  []byte{},
+	}
+	unsignedShutterTx := &types.ShutterTx{
+		ChainID:          config.ChainID,
+		Nonce:            2,
+		GasTipCap:        big.NewInt(0),
+		GasFeeCap:        big.NewInt(0),
+		Gas:              21000,
+		EncryptedPayload: encryptPayload(t, payload, 2),
+	}
+	signer := types.LatestSigner(config)
+	shutterTx, err := types.SignNewTx(userKey, signer, unsignedShutterTx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unsignedPlainTx := &types.LegacyTx{
 		Nonce:    3,
 		GasPrice: common.Big0,
 		Gas:      21000,
 		To:       &receiver,
 		Value:    amount,
 	}
-	signedPlainTx, err := types.SignNewTx(userKey, signer, plainTxData)
+	plainTx, err := types.SignNewTx(userKey, signer, unsignedPlainTx)
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	transactions := []*types.Transaction{
-		types.NewTx(contextTx),
-		signedTx,
-		signedPlainTx,
-	}
+	batchTx := makeBatchTx(t, 2, []*types.Transaction{shutterTx, plainTx})
 
 	senderBalancePre := statedb.GetBalance(userAddress)
 	receiverBalancePre := statedb.GetBalance(receiver)
 
-	receipts, logs, gasUsed, err := process(t, parent, statedb, transactions)
+	receipts, logs, gasUsed, err := processBatchTx(t, parent, statedb, batchTx)
 	if err != nil {
 		t.Fatal(err)
 	}
