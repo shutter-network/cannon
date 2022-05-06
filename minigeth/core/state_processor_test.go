@@ -29,6 +29,7 @@ var (
 	config      = params.TestChainConfig
 	genesisHash = common.HexToHash("0xd702d0441aa0045ac875b526e6ea7064e67604ef2162034a9b7260540f3e9f25")
 	signer      types.Signer
+	baseFee     = new(big.Int).SetUint64(1_000_000_000) // 1 GWei
 
 	deployerKey      *ecdsa.PrivateKey
 	deployerAddress  common.Address
@@ -96,7 +97,7 @@ func init() {
 	signer = types.LatestSigner(config)
 }
 
-func prepare(t *testing.T) (types.Header, *state.StateDB) {
+func prepare(t *testing.T) *state.StateDB {
 	t.Helper()
 
 	oracle.PrefetchBlock(new(big.Int).SetUint64(0), true, nil)
@@ -117,9 +118,9 @@ func prepare(t *testing.T) (types.Header, *state.StateDB) {
 
 	statedb.SetCode(batchCounterAddress, batchCounterDeployedBytecode)
 
-	deployEonKey(t, parent, statedb)
+	deployEonKey(t, statedb)
 
-	return parent, statedb
+	return statedb
 }
 
 func makeBatchTx(t *testing.T, batchIndex uint64, transactions []*types.Transaction) *types.Transaction {
@@ -146,7 +147,7 @@ func makeBatchTx(t *testing.T, batchIndex uint64, transactions []*types.Transact
 	return batchTx
 }
 
-func deployEonKey(t *testing.T, parent types.Header, statedb *state.StateDB) {
+func deployEonKey(t *testing.T, statedb *state.StateDB) {
 	t.Helper()
 
 	unsignedDeployTx := &types.DynamicFeeTx{
@@ -164,7 +165,7 @@ func deployEonKey(t *testing.T, parent types.Header, statedb *state.StateDB) {
 		t.Fatal(err)
 	}
 	deployBatchTx := makeBatchTx(t, 0, []*types.Transaction{deployTx})
-	deployReceipts, _, _, err := processBatchTx(t, parent, statedb, deployBatchTx)
+	deployReceipts, _, _, err := processBatchTx(t, statedb, deployBatchTx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -189,7 +190,7 @@ func deployEonKey(t *testing.T, parent types.Header, statedb *state.StateDB) {
 		t.Fatal(err)
 	}
 	insertBatchTx := makeBatchTx(t, 1, []*types.Transaction{insertTx})
-	insertReceipts, _, _, err := processBatchTx(t, parent, statedb, insertBatchTx)
+	insertReceipts, _, _, err := processBatchTx(t, statedb, insertBatchTx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -198,24 +199,40 @@ func deployEonKey(t *testing.T, parent types.Header, statedb *state.StateDB) {
 	}
 }
 
-func processBatchTx(t *testing.T, parent types.Header, statedb *state.StateDB, batchTx *types.Transaction) (types.Receipts, []*types.Log, uint64, error) {
+func processBatchTx(t *testing.T, statedb *state.StateDB, batchTx *types.Transaction) (types.Receipts, []*types.Log, uint64, error) {
 	t.Helper()
 
 	if batchTx.Type() != types.BatchTxType {
 		t.Fatal("got non batch tx")
 	}
 
-	vmconfig := vm.Config{NoBaseFee: true}
-	bc := NewBlockChain(&parent)
-
-	header := types.Header{
-		ParentHash: parent.Hash(),
+	parent := types.Header{
+		ParentHash: common.Hash{},
 		// UncleHash   common.Hash
 		Coinbase: sequencerAddress,
 		// Root        common.Hash
 		// TxHash      common.Hash
 		// ReceiptHash common.Hash
-		Bloom:      parent.Bloom,
+		Bloom:      types.Bloom{},
+		Difficulty: common.Big1,
+		Number:     common.Big0,
+		GasLimit:   100000000,
+		// GasUsed     uint64
+		Time:      0,
+		Extra:     []byte{},
+		MixDigest: common.Hash{},
+		Nonce:     types.BlockNonce{},
+
+		BaseFee: baseFee,
+	}
+	header := types.Header{
+		ParentHash: common.Hash{},
+		// UncleHash   common.Hash
+		Coinbase: sequencerAddress,
+		// Root        common.Hash
+		// TxHash      common.Hash
+		// ReceiptHash common.Hash
+		Bloom:      types.Bloom{},
 		Difficulty: parent.Difficulty,
 		Number:     new(big.Int).Add(parent.Number, big.NewInt(1)),
 		GasLimit:   parent.GasLimit,
@@ -227,6 +244,8 @@ func processBatchTx(t *testing.T, parent types.Header, statedb *state.StateDB, b
 
 		BaseFee: misc.CalcBaseFee(config, &parent),
 	}
+	vmconfig := vm.Config{NoBaseFee: true}
+	bc := NewBlockChain(&parent)
 	block := types.NewBlock(&header, []*types.Transaction{batchTx}, nil, nil, trie.NewStackTrie(nil))
 
 	processor := NewStateProcessor(config, bc, bc.Engine())
@@ -253,18 +272,35 @@ func encryptPayload(t *testing.T, payload *types.DecryptedPayload, batchIndex ui
 }
 
 func TestEmptyBlock(t *testing.T) {
-	parent, statedb := prepare(t)
-	vmconfig := vm.Config{NoBaseFee: true}
-	bc := NewBlockChain(&parent)
+	statedb := prepare(t)
 
-	header := types.Header{
-		ParentHash: parent.Hash(),
+	parent := types.Header{
+		ParentHash: common.Hash{},
 		// UncleHash   common.Hash
 		Coinbase: sequencerAddress,
 		// Root        common.Hash
 		// TxHash      common.Hash
 		// ReceiptHash common.Hash
-		Bloom:      parent.Bloom,
+		Bloom:      types.Bloom{},
+		Difficulty: common.Big1,
+		Number:     common.Big0,
+		GasLimit:   100000000,
+		// GasUsed     uint64
+		Time:      0,
+		Extra:     []byte{},
+		MixDigest: common.Hash{},
+		Nonce:     types.BlockNonce{},
+
+		BaseFee: baseFee,
+	}
+	header := types.Header{
+		ParentHash: common.Hash{},
+		// UncleHash   common.Hash
+		Coinbase: sequencerAddress,
+		// Root        common.Hash
+		// TxHash      common.Hash
+		// ReceiptHash common.Hash
+		Bloom:      types.Bloom{},
 		Difficulty: parent.Difficulty,
 		Number:     new(big.Int).Add(parent.Number, big.NewInt(1)),
 		GasLimit:   parent.GasLimit,
@@ -278,6 +314,8 @@ func TestEmptyBlock(t *testing.T) {
 	}
 	block := types.NewBlock(&header, []*types.Transaction{}, nil, nil, trie.NewStackTrie(nil))
 
+	vmconfig := vm.Config{NoBaseFee: true}
+	bc := NewBlockChain(&parent)
 	processor := NewStateProcessor(config, bc, bc.Engine())
 	_, _, _, err := processor.Process(block, statedb, vmconfig)
 	if err == nil {
@@ -286,9 +324,9 @@ func TestEmptyBlock(t *testing.T) {
 }
 
 func TestEmptyBatch(t *testing.T) {
-	parent, statedb := prepare(t)
+	statedb := prepare(t)
 	batchTx := makeBatchTx(t, 2, []*types.Transaction{})
-	receipts, logs, gasUsed, err := processBatchTx(t, parent, statedb, batchTx)
+	receipts, logs, gasUsed, err := processBatchTx(t, statedb, batchTx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -304,7 +342,7 @@ func TestEmptyBatch(t *testing.T) {
 }
 
 func TestEmptyShutterTx(t *testing.T) {
-	parent, statedb := prepare(t)
+	statedb := prepare(t)
 	unsignedShutterTx := &types.ShutterTx{
 		ChainID:          config.ChainID,
 		Nonce:            0,
@@ -320,7 +358,7 @@ func TestEmptyShutterTx(t *testing.T) {
 	}
 	batchTx := makeBatchTx(t, 2, []*types.Transaction{shutterTx})
 
-	receipts, logs, gasUsed, err := processBatchTx(t, parent, statedb, batchTx)
+	receipts, logs, gasUsed, err := processBatchTx(t, statedb, batchTx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -336,7 +374,7 @@ func TestEmptyShutterTx(t *testing.T) {
 }
 
 func TestEmptyShutterTxWithFee(t *testing.T) {
-	parent, statedb := prepare(t)
+	statedb := prepare(t)
 	unsignedShutterTx := &types.ShutterTx{
 		ChainID:          config.ChainID,
 		Nonce:            0,
@@ -353,7 +391,7 @@ func TestEmptyShutterTxWithFee(t *testing.T) {
 	batchTx := makeBatchTx(t, 2, []*types.Transaction{shutterTx})
 	userBalancePre := statedb.GetBalance(userAddress)
 
-	receipts, logs, gasUsed, err := processBatchTx(t, parent, statedb, batchTx)
+	receipts, logs, gasUsed, err := processBatchTx(t, statedb, batchTx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -377,7 +415,7 @@ func TestEmptyShutterTxWithFee(t *testing.T) {
 }
 
 func TestTransfer(t *testing.T) {
-	parent, statedb := prepare(t)
+	statedb := prepare(t)
 
 	receiver := common.HexToAddress("2222222222222222222222222222222222222222")
 	amount := big.NewInt(100)
@@ -404,7 +442,7 @@ func TestTransfer(t *testing.T) {
 	senderBalancePre := statedb.GetBalance(userAddress)
 	receiverBalancePre := statedb.GetBalance(receiver)
 
-	receipts, logs, gasUsed, err := processBatchTx(t, parent, statedb, batchTx)
+	receipts, logs, gasUsed, err := processBatchTx(t, statedb, batchTx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -436,7 +474,7 @@ func TestTransfer(t *testing.T) {
 }
 
 func TestContractCall(t *testing.T) {
-	parent, statedb := prepare(t)
+	statedb := prepare(t)
 
 	deployPayload := &types.DecryptedPayload{
 		To:    nil,
@@ -482,7 +520,7 @@ func TestContractCall(t *testing.T) {
 		callTx,
 	})
 
-	receipts, logs, _, err := processBatchTx(t, parent, statedb, batchTx)
+	receipts, logs, _, err := processBatchTx(t, statedb, batchTx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -498,7 +536,7 @@ func TestContractCall(t *testing.T) {
 }
 
 func TestContractDeployment(t *testing.T) {
-	parent, statedb := prepare(t)
+	statedb := prepare(t)
 
 	payload := &types.DecryptedPayload{
 		To:    nil,
@@ -520,7 +558,7 @@ func TestContractDeployment(t *testing.T) {
 	}
 	batchTx := makeBatchTx(t, 2, []*types.Transaction{shutterTx})
 
-	receipts, logs, _, err := processBatchTx(t, parent, statedb, batchTx)
+	receipts, logs, _, err := processBatchTx(t, statedb, batchTx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -544,10 +582,10 @@ func TestContractDeployment(t *testing.T) {
 }
 
 func TestGetEonKey(t *testing.T) {
-	parent, statedb := prepare(t)
+	statedb := prepare(t)
 
 	// mine empty block to test the verification of eon key
-	_, _, _, err := processBatchTx(t, parent, statedb, makeBatchTx(t, 2, []*types.Transaction{}))
+	_, _, _, err := processBatchTx(t, statedb, makeBatchTx(t, 2, []*types.Transaction{}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -555,7 +593,7 @@ func TestGetEonKey(t *testing.T) {
 
 func TestPlaintextTx(t *testing.T) {
 	// Tests that a plaintext tx is properly executed after a ciphertext tx
-	parent, statedb := prepare(t)
+	statedb := prepare(t)
 
 	receiver := common.HexToAddress("2222222222222222222222222222222222222222")
 	amount := big.NewInt(100)
@@ -592,7 +630,7 @@ func TestPlaintextTx(t *testing.T) {
 	senderBalancePre := statedb.GetBalance(userAddress)
 	receiverBalancePre := statedb.GetBalance(receiver)
 
-	receipts, logs, gasUsed, err := processBatchTx(t, parent, statedb, batchTx)
+	receipts, logs, gasUsed, err := processBatchTx(t, statedb, batchTx)
 	if err != nil {
 		t.Fatal(err)
 	}
