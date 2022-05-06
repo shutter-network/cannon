@@ -26,8 +26,10 @@ import (
 const nodeUrl = "http://localhost:8545"
 
 var (
-	config             = params.TestChainConfig
-	genesisHash        = common.HexToHash("0xd702d0441aa0045ac875b526e6ea7064e67604ef2162034a9b7260540f3e9f25")
+	config      = params.TestChainConfig
+	genesisHash = common.HexToHash("0xd702d0441aa0045ac875b526e6ea7064e67604ef2162034a9b7260540f3e9f25")
+	signer      types.Signer
+
 	sequencerKey       *ecdsa.PrivateKey
 	sequencerAddress   common.Address
 	userKey            *ecdsa.PrivateKey
@@ -84,6 +86,8 @@ func init() {
 		}
 		decryptionKeys = append(decryptionKeys, key)
 	}
+
+	signer = types.LatestSigner(config)
 }
 
 func prepare(t *testing.T) (types.Header, *state.StateDB) {
@@ -127,7 +131,6 @@ func makeBatchTx(t *testing.T, batchIndex uint64, transactions []*types.Transact
 		Timestamp:     common.Big0,
 		Transactions:  txBytes,
 	}
-	signer := types.LatestSigner(config)
 	batchTx, err := types.SignNewTx(sequencerKey, signer, &unsignedBatchTx)
 	if err != nil {
 		t.Fatal(err)
@@ -137,7 +140,6 @@ func makeBatchTx(t *testing.T, batchIndex uint64, transactions []*types.Transact
 
 func deployEonKey(t *testing.T, parent types.Header, statedb *state.StateDB) {
 	t.Helper()
-	signer := types.LatestSigner(config)
 
 	unsignedDeployTx := &types.DynamicFeeTx{
 		ChainID:   config.ChainID,
@@ -304,7 +306,6 @@ func TestEmptyShutterTx(t *testing.T) {
 		EncryptedPayload: []byte{},
 		BatchIndex:       2,
 	}
-	signer := types.LatestSigner(config)
 	shutterTx, err := types.SignNewTx(userKey, signer, unsignedShutterTx)
 	if err != nil {
 		t.Fatal(err)
@@ -337,7 +338,6 @@ func TestEmptyShutterTxWithFee(t *testing.T) {
 		EncryptedPayload: []byte{},
 		BatchIndex:       2,
 	}
-	signer := types.LatestSigner(config)
 	shutterTx, err := types.SignNewTx(userKey, signer, unsignedShutterTx)
 	if err != nil {
 		t.Fatal(err)
@@ -387,7 +387,6 @@ func TestTransfer(t *testing.T) {
 		EncryptedPayload: encryptPayload(t, payload, 2),
 		BatchIndex:       2,
 	}
-	signer := types.LatestSigner(config)
 	shutterTx, err := types.SignNewTx(userKey, signer, unsignedShutterTx)
 	if err != nil {
 		t.Fatal(err)
@@ -462,7 +461,6 @@ func TestContractCall(t *testing.T) {
 		BatchIndex:       2,
 	}
 
-	signer := types.LatestSigner(config)
 	deployTx, err := types.SignNewTx(userKey, signer, unsignedDeployTx)
 	if err != nil {
 		t.Fatal(err)
@@ -508,7 +506,6 @@ func TestContractDeployment(t *testing.T) {
 		EncryptedPayload: encryptPayload(t, payload, 2),
 		BatchIndex:       2,
 	}
-	signer := types.LatestSigner(config)
 	shutterTx, err := types.SignNewTx(userKey, signer, unsignedShutterTx)
 	if err != nil {
 		t.Fatal(err)
@@ -567,7 +564,6 @@ func TestPlaintextTx(t *testing.T) {
 		Gas:              21000,
 		EncryptedPayload: encryptPayload(t, payload, 2),
 	}
-	signer := types.LatestSigner(config)
 	shutterTx, err := types.SignNewTx(userKey, signer, unsignedShutterTx)
 	if err != nil {
 		t.Fatal(err)
