@@ -782,3 +782,36 @@ func TestPlaintextTx(t *testing.T) {
 		t.Fatalf("expected receiver balance to increase by %d, got %d", expectedDiff, receiverBalanceDiff)
 	}
 }
+
+func TestWrongBatchIndex(t *testing.T) {
+	statedb := prepare(t)
+	batchIndex := getBatchIndexTesting(t, statedb) + 1
+	unsignedBatchTx := types.BatchTx{
+		ChainID:       config.ChainID,
+		DecryptionKey: decryptionKeys[batchIndex].Marshal(),
+		BatchIndex:    batchIndex,
+		L1BlockNumber: common.Big0,
+		Timestamp:     common.Big0,
+		Transactions:  [][]byte{},
+	}
+	batchTx, err := types.SignNewTx(sequencerKey, signer, &unsignedBatchTx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, _, err = processBatchTx(t, statedb, batchTx)
+	if err == nil {
+		t.Fatal("batch tx with batch index too large was not rejected")
+	}
+
+	batchIndex -= 2
+	unsignedBatchTx.BatchIndex = batchIndex
+	unsignedBatchTx.DecryptionKey = decryptionKeys[batchIndex].Marshal()
+	batchTx, err = types.SignNewTx(sequencerKey, signer, &unsignedBatchTx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, _, err = processBatchTx(t, statedb, batchTx)
+	if err == nil {
+		t.Fatal("batch tx with batch index too small was not rejected")
+	}
+}
