@@ -305,23 +305,31 @@ func getEonKeyFromContract(e *vm.EVM, eonKeyContract common.Address, blockNumber
 	return eonKey, nil
 }
 
-// checkBatchIndex checks that the current batch counter value equals the given batch index.
-func checkBatchIndex(e *vm.EVM, batchCounterContract common.Address, batchIndex uint64) error {
+// getBatchIndex returns the current batch index in the batch counter contract.
+func getBatchIndex(e *vm.EVM, batchCounterContract common.Address) (uint64, error) {
 	caller := vm.AccountRef(common.Address{})
 	selector := crypto.Keccak256([]byte("batchIndex()"))[:4]
 	result, _, err := e.Call(caller, batchCounterContract, selector, 1000000, common.Big0)
 	if err != nil {
-		return err
+		return 0, err
 	}
 
 	resultBig := new(big.Int).SetBytes(result)
 	resultUint64 := resultBig.Uint64()
 	if new(big.Int).SetUint64(resultUint64).Cmp(resultBig) != 0 {
-		return fmt.Errorf("get batch index contract call result is not a uint64")
+		return 0, fmt.Errorf("get batch index contract call result is not a uint64")
 	}
+	return resultUint64, nil
+}
 
-	if resultUint64 != batchIndex {
-		return fmt.Errorf("expected batch #%d, but got batch #%d", resultUint64, batchIndex)
+// checkBatchIndex checks that the current batch counter value equals the given batch index.
+func checkBatchIndex(e *vm.EVM, batchCounterContract common.Address, batchIndex uint64) error {
+	currentBatchIndex, err := getBatchIndex(e, batchCounterContract)
+	if err != nil {
+		return nil
+	}
+	if currentBatchIndex != batchIndex {
+		return fmt.Errorf("expected batch #%d, but got batch #%d", currentBatchIndex, batchIndex)
 	}
 	return nil
 }

@@ -123,7 +123,8 @@ func prepare(t *testing.T) *state.StateDB {
 	return statedb
 }
 
-func makeBatchTx(t *testing.T, batchIndex uint64, transactions []*types.Transaction) *types.Transaction {
+func makeBatchTx(t *testing.T, statedb *state.StateDB, transactions []*types.Transaction) *types.Transaction {
+	batchIndex := getBatchIndexTesting(t, statedb)
 	txBytes := [][]byte{}
 	for _, tx := range transactions {
 		b, err := tx.MarshalBinary()
@@ -164,7 +165,7 @@ func deployEonKey(t *testing.T, statedb *state.StateDB) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	deployBatchTx := makeBatchTx(t, 0, []*types.Transaction{deployTx})
+	deployBatchTx := makeBatchTx(t, statedb, []*types.Transaction{deployTx})
 	deployReceipts, _, _, err := processBatchTx(t, statedb, deployBatchTx)
 	if err != nil {
 		t.Fatal(err)
@@ -189,7 +190,7 @@ func deployEonKey(t *testing.T, statedb *state.StateDB) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	insertBatchTx := makeBatchTx(t, 1, []*types.Transaction{insertTx})
+	insertBatchTx := makeBatchTx(t, statedb, []*types.Transaction{insertTx})
 	insertReceipts, _, _, err := processBatchTx(t, statedb, insertBatchTx)
 	if err != nil {
 		t.Fatal(err)
@@ -271,6 +272,38 @@ func encryptPayload(t *testing.T, payload *types.DecryptedPayload, batchIndex ui
 	return encryptedPayload.Marshal()
 }
 
+func getBatchIndexTesting(t *testing.T, statedb *state.StateDB) uint64 {
+	t.Helper()
+	header := &types.Header{
+		ParentHash: common.Hash{},
+		// UncleHash   common.Hash
+		Coinbase: sequencerAddress,
+		// Root        common.Hash
+		// TxHash      common.Hash
+		// ReceiptHash common.Hash
+		Bloom:      types.Bloom{},
+		Difficulty: common.Big1,
+		Number:     common.Big0,
+		GasLimit:   100000000,
+		// GasUsed     uint64
+		Time:      0,
+		Extra:     []byte{},
+		MixDigest: common.Hash{},
+		Nonce:     types.BlockNonce{},
+
+		BaseFee: baseFee,
+	}
+	bc := NewBlockChain(header)
+	blockContext := NewEVMBlockContext(header, bc, nil)
+	vmconfig := vm.Config{NoBaseFee: true}
+	vmenv := vm.NewEVM(blockContext, vm.TxContext{}, statedb, config, vmconfig)
+	batchIndex, err := getBatchIndex(vmenv, config.BatchCounterAddress)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return batchIndex
+}
+
 func TestEmptyBlock(t *testing.T) {
 	statedb := prepare(t)
 
@@ -325,7 +358,7 @@ func TestEmptyBlock(t *testing.T) {
 
 func TestEmptyBatch(t *testing.T) {
 	statedb := prepare(t)
-	batchTx := makeBatchTx(t, 2, []*types.Transaction{})
+	batchTx := makeBatchTx(t, statedb, []*types.Transaction{})
 	receipts, logs, gasUsed, err := processBatchTx(t, statedb, batchTx)
 	if err != nil {
 		t.Fatal(err)
@@ -350,13 +383,13 @@ func TestEmptyShutterTx(t *testing.T) {
 		GasFeeCap:        big.NewInt(0),
 		Gas:              0,
 		EncryptedPayload: []byte{},
-		BatchIndex:       2,
+		BatchIndex:       getBatchIndexTesting(t, statedb),
 	}
 	shutterTx, err := types.SignNewTx(userKey, signer, unsignedShutterTx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	batchTx := makeBatchTx(t, 2, []*types.Transaction{shutterTx})
+	batchTx := makeBatchTx(t, statedb, []*types.Transaction{shutterTx})
 
 	receipts, logs, gasUsed, err := processBatchTx(t, statedb, batchTx)
 	if err != nil {
@@ -382,13 +415,13 @@ func TestEmptyShutterTxWithFee(t *testing.T) {
 		GasFeeCap:        big.NewInt(500), // much smaller than base fee
 		Gas:              100,
 		EncryptedPayload: []byte{},
-		BatchIndex:       2,
+		BatchIndex:       getBatchIndexTesting(t, statedb),
 	}
 	shutterTx, err := types.SignNewTx(userKey, signer, unsignedShutterTx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	batchTx := makeBatchTx(t, 2, []*types.Transaction{shutterTx})
+	batchTx := makeBatchTx(t, statedb, []*types.Transaction{shutterTx})
 	userBalancePre := statedb.GetBalance(userAddress)
 
 	receipts, logs, gasUsed, err := processBatchTx(t, statedb, batchTx)
@@ -424,20 +457,21 @@ func TestTransfer(t *testing.T) {
 		Value: amount,
 		Data:  []byte{},
 	}
+	batchIndex := getBatchIndexTesting(t, statedb)
 	unsignedShutterTx := &types.ShutterTx{
 		ChainID:          config.ChainID,
 		Nonce:            statedb.GetNonce(userAddress),
 		GasTipCap:        big.NewInt(0),
 		GasFeeCap:        big.NewInt(0),
 		Gas:              21000,
-		EncryptedPayload: encryptPayload(t, payload, 2),
-		BatchIndex:       2,
+		EncryptedPayload: encryptPayload(t, payload, batchIndex),
+		BatchIndex:       batchIndex,
 	}
 	shutterTx, err := types.SignNewTx(userKey, signer, unsignedShutterTx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	batchTx := makeBatchTx(t, 2, []*types.Transaction{shutterTx})
+	batchTx := makeBatchTx(t, statedb, []*types.Transaction{shutterTx})
 
 	senderBalancePre := statedb.GetBalance(userAddress)
 	receiverBalancePre := statedb.GetBalance(receiver)
@@ -481,14 +515,15 @@ func TestContractCall(t *testing.T) {
 		Value: big.NewInt(0),
 		Data:  contractDeployData,
 	}
+	batchIndex := getBatchIndexTesting(t, statedb)
 	unsignedDeployTx := &types.ShutterTx{
 		ChainID:          config.ChainID,
 		Nonce:            statedb.GetNonce(userAddress),
 		GasTipCap:        big.NewInt(0),
 		GasFeeCap:        big.NewInt(0),
 		Gas:              1000000,
-		EncryptedPayload: encryptPayload(t, deployPayload, 2),
-		BatchIndex:       2,
+		EncryptedPayload: encryptPayload(t, deployPayload, batchIndex),
+		BatchIndex:       batchIndex,
 	}
 
 	contractAddress := common.HexToAddress("0xFA33c8EF8b5c4f3003361c876a298D1DB61ccA4e")
@@ -503,8 +538,8 @@ func TestContractCall(t *testing.T) {
 		GasTipCap:        big.NewInt(0),
 		GasFeeCap:        big.NewInt(0),
 		Gas:              100000,
-		EncryptedPayload: encryptPayload(t, callPayload, 2),
-		BatchIndex:       2,
+		EncryptedPayload: encryptPayload(t, callPayload, batchIndex),
+		BatchIndex:       batchIndex,
 	}
 
 	deployTx, err := types.SignNewTx(userKey, signer, unsignedDeployTx)
@@ -515,7 +550,7 @@ func TestContractCall(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	batchTx := makeBatchTx(t, 2, []*types.Transaction{
+	batchTx := makeBatchTx(t, statedb, []*types.Transaction{
 		deployTx,
 		callTx,
 	})
@@ -543,20 +578,21 @@ func TestContractDeployment(t *testing.T) {
 		Value: big.NewInt(0),
 		Data:  contractDeployData,
 	}
+	batchIndex := getBatchIndexTesting(t, statedb)
 	unsignedShutterTx := &types.ShutterTx{
 		ChainID:          config.ChainID,
 		Nonce:            statedb.GetNonce(userAddress),
 		GasTipCap:        big.NewInt(0),
 		GasFeeCap:        big.NewInt(0),
 		Gas:              1000000,
-		EncryptedPayload: encryptPayload(t, payload, 2),
-		BatchIndex:       2,
+		EncryptedPayload: encryptPayload(t, payload, batchIndex),
+		BatchIndex:       batchIndex,
 	}
 	shutterTx, err := types.SignNewTx(userKey, signer, unsignedShutterTx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	batchTx := makeBatchTx(t, 2, []*types.Transaction{shutterTx})
+	batchTx := makeBatchTx(t, statedb, []*types.Transaction{shutterTx})
 
 	receipts, logs, _, err := processBatchTx(t, statedb, batchTx)
 	if err != nil {
@@ -585,7 +621,7 @@ func TestGetEonKey(t *testing.T) {
 	statedb := prepare(t)
 
 	// mine empty block to test the verification of eon key
-	_, _, _, err := processBatchTx(t, statedb, makeBatchTx(t, 2, []*types.Transaction{}))
+	_, _, _, err := processBatchTx(t, statedb, makeBatchTx(t, statedb, []*types.Transaction{}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -602,13 +638,15 @@ func TestPlaintextTx(t *testing.T) {
 		Value: amount,
 		Data:  []byte{},
 	}
+	batchIndex := getBatchIndexTesting(t, statedb)
 	unsignedShutterTx := &types.ShutterTx{
 		ChainID:          config.ChainID,
 		Nonce:            statedb.GetNonce(userAddress),
 		GasTipCap:        big.NewInt(0),
 		GasFeeCap:        big.NewInt(0),
 		Gas:              21000,
-		EncryptedPayload: encryptPayload(t, payload, 2),
+		EncryptedPayload: encryptPayload(t, payload, batchIndex),
+		BatchIndex:       batchIndex,
 	}
 	shutterTx, err := types.SignNewTx(userKey, signer, unsignedShutterTx)
 	if err != nil {
@@ -625,7 +663,7 @@ func TestPlaintextTx(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	batchTx := makeBatchTx(t, 2, []*types.Transaction{shutterTx, plainTx})
+	batchTx := makeBatchTx(t, statedb, []*types.Transaction{shutterTx, plainTx})
 
 	senderBalancePre := statedb.GetBalance(userAddress)
 	receiverBalancePre := statedb.GetBalance(receiver)
