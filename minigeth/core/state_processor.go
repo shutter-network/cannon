@@ -17,6 +17,7 @@
 package core
 
 import (
+	"bytes"
 	"fmt"
 	"log"
 	"math/big"
@@ -35,11 +36,47 @@ import (
 	"github.com/shutter-network/shutter/shlib/shcrypto"
 )
 
-var eonKeyStorageAbi abi.ABI
+var (
+	eonKeyStorageAbi  abi.ABI
+	addrsSeqAbi       abi.ABI
+	collatorConfigAbi abi.ABI
+)
 
 func init() {
-	def := `[{ "name": "method", "type": "function", "outputs": [{"type": "bytes"}]}]`
-	eonKeyStorageAbi, _ = abi.JSON(strings.NewReader(def))
+	eonKeyStorageAbiDef := `[{ "name": "method", "type": "function", "outputs": [{"type": "bytes"}]}]`
+	eonKeyStorageAbi, _ = abi.JSON(strings.NewReader(eonKeyStorageAbiDef))
+
+	addrsSeqAbiDef := `[{"inputs": [{"type": "uint64"},{"type": "uint64"}],
+		"name": "at",
+		"outputs": [{"type": "address"}],
+		"type": "function"}]`
+	addrsSeqAbi, _ = abi.JSON(strings.NewReader(addrsSeqAbiDef))
+
+	collatorConfigAbiDef := `[{"inputs": [{"type": "uint64"}],
+		"name": "getActiveConfig",
+		"outputs": [
+		  {
+			"components": [
+			  {
+				"internalType": "uint64",
+				"name": "activationBlockNumber",
+				"type": "uint64"
+			  },
+			  {
+				"internalType": "uint64",
+				"name": "setIndex",
+				"type": "uint64"
+			  }
+			],
+			"internalType": "struct CollatorConfig",
+			"name": "",
+			"type": "tuple"
+		  }
+		],
+		"stateMutability": "view",
+		"type": "function"
+	  }]`
+	collatorConfigAbi, _ = abi.JSON(strings.NewReader(collatorConfigAbiDef))
 }
 
 // StateProcessor is a basic Processor, which takes care of transitioning
@@ -159,8 +196,19 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 		}
 	}
 
-	// check batch signature
-	// TODO
+	// check batch signature (if the collator config contract has been deployed yet)
+	batchTxSigner, err := signer.Sender(batchTx)
+	if err != nil {
+		return nil, nil, 0, fmt.Errorf("invalid batch signature: %s", err)
+	}
+	log.Println(p.config.CollatorConfigListAddress)
+	collatorAddress, err := getCollatorAddress(e, p.config.CollatorConfigListAddress, batchTx.L1BlockNumber())
+	if err != nil {
+		return nil, nil, 0, fmt.Errorf("failed to get collator address from config list contract: %s", err)
+	}
+	if collatorAddress != nil && batchTxSigner != *collatorAddress {
+		return nil, nil, 0, fmt.Errorf("batch was signed by %s instead of collator %s (at mainchain block %d)", batchTxSigner, collatorAddress, batchTx.L1BlockNumber())
+	}
 
 	// check l1BlockNumber and timestamp
 	// TODO
@@ -290,7 +338,6 @@ func getEonKeyFromContract(e *vm.EVM, eonKeyContract common.Address, blockNumber
 	if len(decoded) != 1 {
 		return nil, fmt.Errorf("decoded multiple outputs with eon key storage abi")
 	}
-	var ok bool
 	eonKeyBytes, ok := decoded[0].([]byte)
 	if !ok {
 		return nil, fmt.Errorf("could not decode bytes out of eon key output")
@@ -320,6 +367,65 @@ func getBatchIndex(e *vm.EVM, batchCounterContract common.Address) (uint64, erro
 		return 0, fmt.Errorf("get batch index contract call result is not a uint64")
 	}
 	return resultUint64, nil
+}
+
+// getCollatorAddress returns the address configured as the collator in the collator config
+// contract for the given L1 block number. If the contract hasn't been deployed yet, it returns
+// nil.
+func getCollatorAddress(e *vm.EVM, collatorConfigContract common.Address, blockNumber *big.Int) (*common.Address, error) {
+	if e.StateDB.GetCodeSize(collatorConfigContract) == 0 {
+		return nil, nil
+	}
+
+	caller := vm.AccountRef(common.Address{})
+	configData, err := collatorConfigAbi.Pack("getActiveConfig", blockNumber.Uint64())
+	if err != nil {
+		return nil, err
+	}
+	configResult, _, err := e.Call(caller, collatorConfigContract, configData, 1000000, common.Big0)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get active collator config index: %s", err)
+	}
+
+	configResultBig := new(big.Int).SetBytes(configResult)
+	configResultUint64 := configResultBig.Uint64()
+	if new(big.Int).SetUint64(configResultUint64).Cmp(configResultBig) != 0 {
+		return nil, fmt.Errorf("collator config index is not a uint64")
+	}
+
+	addrsSeqSelector := crypto.Keccak256([]byte("addrsSeq()"))[:4]
+	addrsSeqResult, _, err := e.Call(caller, collatorConfigContract, addrsSeqSelector, 1000000, common.Big0)
+	if err != nil {
+		return nil, err
+	}
+	if len(addrsSeqResult) != 32 {
+		return nil, fmt.Errorf("expected addrsSeq call to return 32 bytes, got %d", len(addrsSeqResult))
+	}
+	if !bytes.Equal(addrsSeqResult[:12], bytes.Repeat([]byte{0}, 12)) {
+		return nil, fmt.Errorf("expected addrsSeq call to return address")
+	}
+	addrsSeqAddress := common.BytesToAddress(addrsSeqResult[12:])
+
+	atData, err := addrsSeqAbi.Pack("at", configResultUint64, uint64(0))
+	if err != nil {
+		return nil, err
+	}
+	atResult, _, err := e.Call(caller, addrsSeqAddress, atData, 1000000, common.Big0)
+	if err != nil {
+		return nil, err
+	}
+	atReturnValues, err := addrsSeqAbi.Unpack("at", atResult)
+	if err != nil {
+		return nil, err
+	}
+	if len(atReturnValues) != 1 {
+		return nil, fmt.Errorf("expected exactly one return value, got %d", len(atReturnValues))
+	}
+	collator, ok := atReturnValues[0].(common.Address)
+	if !ok {
+		return nil, fmt.Errorf("could not decode at return value as address")
+	}
+	return &collator, nil
 }
 
 // checkBatchIndex checks that the current batch counter value equals the given batch index.
