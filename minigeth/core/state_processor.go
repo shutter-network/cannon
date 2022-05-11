@@ -17,13 +17,11 @@
 package core
 
 import (
-	"bytes"
 	"fmt"
 	"log"
 	"math/big"
-	"strings"
+	"reflect"
 
-	"github.com/ethereum/go-ethereum/abi"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/math"
 	"github.com/ethereum/go-ethereum/consensus"
@@ -35,49 +33,6 @@ import (
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/shutter-network/shutter/shlib/shcrypto"
 )
-
-var (
-	eonKeyStorageAbi  abi.ABI
-	addrsSeqAbi       abi.ABI
-	collatorConfigAbi abi.ABI
-)
-
-func init() {
-	eonKeyStorageAbiDef := `[{ "name": "method", "type": "function", "outputs": [{"type": "bytes"}]}]`
-	eonKeyStorageAbi, _ = abi.JSON(strings.NewReader(eonKeyStorageAbiDef))
-
-	addrsSeqAbiDef := `[{"inputs": [{"type": "uint64"},{"type": "uint64"}],
-		"name": "at",
-		"outputs": [{"type": "address"}],
-		"type": "function"}]`
-	addrsSeqAbi, _ = abi.JSON(strings.NewReader(addrsSeqAbiDef))
-
-	collatorConfigAbiDef := `[{"inputs": [{"type": "uint64"}],
-		"name": "getActiveConfig",
-		"outputs": [
-		  {
-			"components": [
-			  {
-				"internalType": "uint64",
-				"name": "activationBlockNumber",
-				"type": "uint64"
-			  },
-			  {
-				"internalType": "uint64",
-				"name": "setIndex",
-				"type": "uint64"
-			  }
-			],
-			"internalType": "struct CollatorConfig",
-			"name": "",
-			"type": "tuple"
-		  }
-		],
-		"stateMutability": "view",
-		"type": "function"
-	  }]`
-	collatorConfigAbi, _ = abi.JSON(strings.NewReader(collatorConfigAbiDef))
-}
 
 // StateProcessor is a basic Processor, which takes care of transitioning
 // state from one point to another.
@@ -144,7 +99,10 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 	if err != nil {
 		return nil, nil, 0, err
 	}
-	incrementBatchIndexMsg := makeIncrementBatchIndexMessage(blockContext, statedb, p.config, cfg)
+	incrementBatchIndexMsg, err := makeIncrementBatchIndexMessage(blockContext, statedb, p.config, cfg)
+	if err != nil {
+		return nil, nil, 0, err
+	}
 	incrementBatchIndexTx := types.NewTransaction(
 		incrementBatchIndexMsg.Nonce(),    // nonce
 		*incrementBatchIndexMsg.To(),      // to
@@ -201,11 +159,11 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 	if err != nil {
 		return nil, nil, 0, fmt.Errorf("invalid batch signature: %s", err)
 	}
-	log.Println(p.config.CollatorConfigListAddress)
 	collatorAddress, err := getCollatorAddress(e, p.config.CollatorConfigListAddress, batchTx.L1BlockNumber())
 	if err != nil {
 		return nil, nil, 0, fmt.Errorf("failed to get collator address from config list contract: %s", err)
 	}
+	log.Printf("collator for block #%d: %s", batchTx.L1BlockNumber(), collatorAddress)
 	if collatorAddress != nil && batchTxSigner != *collatorAddress {
 		return nil, nil, 0, fmt.Errorf("batch was signed by %s instead of collator %s (at mainchain block %d)", batchTxSigner, collatorAddress, batchTx.L1BlockNumber())
 	}
@@ -316,10 +274,10 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 func getEonKeyFromContract(e *vm.EVM, eonKeyContract common.Address, blockNumber *big.Int) (*shcrypto.EonPublicKey, error) {
 	caller := vm.AccountRef(common.Address{})
 
-	selector := crypto.Keccak256([]byte("get(uint64)"))[:4]
-	paddedBlk := common.BigToHash(blockNumber)
-	callData := append(selector, paddedBlk.Bytes()...)
-
+	callData, err := eonKeyStorageABI.Pack("get", blockNumber.Uint64())
+	if err != nil {
+		return nil, err
+	}
 	result, _, err := e.Call(caller, eonKeyContract, callData, 1000000, common.Big0)
 	if err != nil {
 		log.Printf("failed to find eon key for block #%s: %s", blockNumber, err)
@@ -331,7 +289,7 @@ func getEonKeyFromContract(e *vm.EVM, eonKeyContract common.Address, blockNumber
 	}
 
 	// decode result with abi
-	decoded, err := eonKeyStorageAbi.Unpack("method", result)
+	decoded, err := eonKeyStorageABI.Unpack("get", result)
 	if err != nil {
 		return nil, err
 	}
@@ -355,8 +313,11 @@ func getEonKeyFromContract(e *vm.EVM, eonKeyContract common.Address, blockNumber
 // getBatchIndex returns the current batch index in the batch counter contract.
 func getBatchIndex(e *vm.EVM, batchCounterContract common.Address) (uint64, error) {
 	caller := vm.AccountRef(common.Address{})
-	selector := crypto.Keccak256([]byte("batchIndex()"))[:4]
-	result, _, err := e.Call(caller, batchCounterContract, selector, 1000000, common.Big0)
+	callData, err := batchCounterABI.Pack("batchIndex")
+	if err != nil {
+		return 0, err
+	}
+	result, _, err := e.Call(caller, batchCounterContract, callData, 1000000, common.Big0)
 	if err != nil {
 		return 0, err
 	}
@@ -378,7 +339,7 @@ func getCollatorAddress(e *vm.EVM, collatorConfigContract common.Address, blockN
 	}
 
 	caller := vm.AccountRef(common.Address{})
-	configData, err := collatorConfigAbi.Pack("getActiveConfig", blockNumber.Uint64())
+	configData, err := collatorConfigABI.Pack("getActiveConfig", blockNumber.Uint64())
 	if err != nil {
 		return nil, err
 	}
@@ -386,27 +347,42 @@ func getCollatorAddress(e *vm.EVM, collatorConfigContract common.Address, blockN
 	if err != nil {
 		return nil, fmt.Errorf("failed to get active collator config index: %s", err)
 	}
-
-	configResultBig := new(big.Int).SetBytes(configResult)
-	configResultUint64 := configResultBig.Uint64()
-	if new(big.Int).SetUint64(configResultUint64).Cmp(configResultBig) != 0 {
-		return nil, fmt.Errorf("collator config index is not a uint64")
-	}
-
-	addrsSeqSelector := crypto.Keccak256([]byte("addrsSeq()"))[:4]
-	addrsSeqResult, _, err := e.Call(caller, collatorConfigContract, addrsSeqSelector, 1000000, common.Big0)
+	configReturnValues, err := collatorConfigABI.Unpack("getActiveConfig", configResult)
 	if err != nil {
 		return nil, err
 	}
-	if len(addrsSeqResult) != 32 {
-		return nil, fmt.Errorf("expected addrsSeq call to return 32 bytes, got %d", len(addrsSeqResult))
+	if len(configReturnValues) != 1 {
+		return nil, fmt.Errorf("expected getActiveConfig to return 1 value, got %d", len(configReturnValues))
 	}
-	if !bytes.Equal(addrsSeqResult[:12], bytes.Repeat([]byte{0}, 12)) {
+	setIndex := reflect.ValueOf(configReturnValues[0]).FieldByName("SetIndex").Uint()
+	if setIndex == 0 {
+		// Set index 0 is used as a guard element and contains no addresses. If this is the active
+		// config, no real config has been deployed yet. We return nil to signal that, similar to
+		// what we'd do if the collator config contract hasn't been deployed yet at all.
+		return nil, nil
+	}
+
+	addrsSeqData, err := collatorConfigABI.Pack("addrsSeq")
+	if err != nil {
+		return nil, err
+	}
+	addrsSeqResult, _, err := e.Call(caller, collatorConfigContract, addrsSeqData, 1000000, common.Big0)
+	if err != nil {
+		return nil, err
+	}
+	addrsSeqReturnValues, err := collatorConfigABI.Unpack("addrsSeq", addrsSeqResult)
+	if err != nil {
+		return nil, err
+	}
+	if len(addrsSeqReturnValues) != 1 {
+		return nil, fmt.Errorf("expected addrsSeq call to return one value, got %d", len(addrsSeqReturnValues))
+	}
+	addrsSeqAddress, ok := addrsSeqReturnValues[0].(common.Address)
+	if !ok {
 		return nil, fmt.Errorf("expected addrsSeq call to return address")
 	}
-	addrsSeqAddress := common.BytesToAddress(addrsSeqResult[12:])
 
-	atData, err := addrsSeqAbi.Pack("at", configResultUint64, uint64(0))
+	atData, err := addrsSeqABI.Pack("at", setIndex, uint64(0))
 	if err != nil {
 		return nil, err
 	}
@@ -414,7 +390,7 @@ func getCollatorAddress(e *vm.EVM, collatorConfigContract common.Address, blockN
 	if err != nil {
 		return nil, err
 	}
-	atReturnValues, err := addrsSeqAbi.Unpack("at", atResult)
+	atReturnValues, err := addrsSeqABI.Unpack("at", atResult)
 	if err != nil {
 		return nil, err
 	}
@@ -440,9 +416,12 @@ func checkBatchIndex(e *vm.EVM, batchCounterContract common.Address, batchIndex 
 	return nil
 }
 
-func makeIncrementBatchIndexMessage(blockCtx vm.BlockContext, statedb vm.StateDB, chainConfig *params.ChainConfig, config vm.Config) types.Message {
+func makeIncrementBatchIndexMessage(blockCtx vm.BlockContext, statedb vm.StateDB, chainConfig *params.ChainConfig, config vm.Config) (types.Message, error) {
 	nonce := statedb.GetNonce(common.Address{})
-	selector := crypto.Keccak256([]byte("increment()"))[:4]
+	callData, err := batchCounterABI.Pack("increment")
+	if err != nil {
+		return types.Message{}, err
+	}
 	return types.NewMessage(
 		common.Address{},                 // from
 		&chainConfig.BatchCounterAddress, // to
@@ -452,10 +431,10 @@ func makeIncrementBatchIndexMessage(blockCtx vm.BlockContext, statedb vm.StateDB
 		common.Big0,                      // gas price
 		common.Big0,                      // gas fee cap
 		common.Big0,                      // gas tip cap
-		selector,                         // data
+		callData,                         // data
 		nil,                              // access list
 		false,                            // fake
-	)
+	), nil
 }
 
 func decryptPayload(encryptedPayloadBytes []byte, decryptionKey *shcrypto.EpochSecretKey) (*types.DecryptedPayload, error) {
