@@ -93,21 +93,53 @@ func init() {
 	signer = types.LatestSigner(config)
 }
 
+func fatalIfError(t *testing.T, err error) {
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func assertTxsSuccessful(t *testing.T, receipts []*types.Receipt, n int) {
+	if len(receipts) != n {
+		t.Fatalf("expected %d receipts, got %d", n, len(receipts))
+	}
+	for i, receipt := range receipts {
+		if receipt.Status != types.ReceiptStatusSuccessful {
+			t.Fatalf("transaction %d failed", i)
+		}
+	}
+}
+
+func assertNoReceiptsNoLogsSomeGasUsed(t *testing.T, receipts []*types.Receipt, logs []*types.Log, gasUsed uint64) {
+	if len(receipts) != 0 {
+		t.Fatalf("expected no receipts, got %d", len(receipts))
+	}
+	if len(logs) != 0 {
+		t.Fatalf("expected no logs, got %d", len(logs))
+	}
+	if gasUsed == 0 {
+		t.Fatalf("expected tx to consume some gas")
+	}
+}
+
+func assertBalanceDiff(t *testing.T, balancePre, balancePost, expectedDiff *big.Int) {
+	diff := new(big.Int).Sub(balancePost, balancePre)
+	if diff.Cmp(expectedDiff) != 0 {
+		t.Fatalf("expected balance to change from %d by %d, but changed by %d", balancePre, expectedDiff, diff)
+	}
+}
+
 func prepare(t *testing.T) *state.StateDB {
 	t.Helper()
 
 	oracle.PrefetchBlock(new(big.Int).SetUint64(0), true, nil)
 	parent := types.Header{}
 	err := rlp.DecodeBytes(oracle.Preimage(genesisHash), &parent)
-	if err != nil {
-		t.Fatal(err)
-	}
+	fatalIfError(t, err)
 
 	database := state.NewDatabase(parent)
 	statedb, err := state.New(parent.Root, database, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	fatalIfError(t, err)
 
 	statedb.SetBalance(deployerAddress, big.NewInt(1000000000000000000))
 	statedb.SetBalance(userAddress, big.NewInt(1000000000000000000))
@@ -131,9 +163,7 @@ func makeBatchTxWithBlockNumber(t *testing.T, statedb *state.StateDB, blockNumbe
 	txBytes := [][]byte{}
 	for _, tx := range transactions {
 		b, err := tx.MarshalBinary()
-		if err != nil {
-			t.Fatal(err)
-		}
+		fatalIfError(t, err)
 		txBytes = append(txBytes, b)
 	}
 	unsignedBatchTx := types.BatchTx{
@@ -145,9 +175,7 @@ func makeBatchTxWithBlockNumber(t *testing.T, statedb *state.StateDB, blockNumbe
 		Transactions:  txBytes,
 	}
 	batchTx, err := types.SignNewTx(sequencerKey, signer, &unsignedBatchTx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	fatalIfError(t, err)
 	return batchTx
 }
 
@@ -165,24 +193,16 @@ func deployEonKey(t *testing.T, statedb *state.StateDB) {
 		Data:      common.FromHex(eonKeyStorageJSON["bytecode"].(string)),
 	}
 	deployTx, err := types.SignNewTx(deployerKey, signer, unsignedDeployTx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	fatalIfError(t, err)
 	deployBatchTx := makeBatchTx(t, statedb, []*types.Transaction{deployTx})
 	deployReceipts, _, _, err := processBatchTx(t, statedb, deployBatchTx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(deployReceipts) != 1 || deployReceipts[0].Status != types.ReceiptStatusSuccessful {
-		t.Fatal("deploying eon key storage contract failed")
-	}
+	fatalIfError(t, err)
+	assertTxsSuccessful(t, deployReceipts, 1)
 	config.EonKeyBroadcastAddress = deployReceipts[0].ContractAddress
 
 	// insert eon key into storage
 	insertEonKeyCalldata, err := eonKeyStorageABI.Pack("insert", eonKeyBytes, uint64(0))
-	if err != nil {
-		t.Fatal(err)
-	}
+	fatalIfError(t, err)
 	unsignedInsertTx := &types.DynamicFeeTx{
 		ChainID:   config.ChainID,
 		Nonce:     statedb.GetNonce(deployerAddress),
@@ -194,17 +214,11 @@ func deployEonKey(t *testing.T, statedb *state.StateDB) {
 		Data:      insertEonKeyCalldata,
 	}
 	insertTx, err := types.SignNewTx(deployerKey, signer, unsignedInsertTx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	fatalIfError(t, err)
 	insertBatchTx := makeBatchTx(t, statedb, []*types.Transaction{insertTx})
 	insertReceipts, _, _, err := processBatchTx(t, statedb, insertBatchTx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(insertReceipts) != 1 || insertReceipts[0].Status != types.ReceiptStatusSuccessful {
-		t.Fatal("inserting eon key to storage contract failed")
-	}
+	fatalIfError(t, err)
+	assertTxsSuccessful(t, insertReceipts, 1)
 }
 
 func deployCollatorConfig(t *testing.T, statedb *state.StateDB) {
@@ -222,17 +236,11 @@ func deployCollatorConfig(t *testing.T, statedb *state.StateDB) {
 		Data:      common.FromHex(addrsSeqJSON["bytecode"].(string)),
 	}
 	deployAddrsTx, err := types.SignNewTx(deployerKey, signer, unsignedDeployAddrsTx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	fatalIfError(t, err)
 	deployAddrsBatchTx := makeBatchTx(t, statedb, []*types.Transaction{deployAddrsTx})
 	deployAddrsReceipts, _, _, err := processBatchTx(t, statedb, deployAddrsBatchTx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(deployAddrsReceipts) != 1 || deployAddrsReceipts[0].Status != types.ReceiptStatusSuccessful {
-		t.Fatal("deploying addrs seq contract failed")
-	}
+	fatalIfError(t, err)
+	assertTxsSuccessful(t, deployAddrsReceipts, 1)
 	addrsSeqAddress := deployAddrsReceipts[0].ContractAddress
 
 	// initialize the addrs seq contract:
@@ -240,9 +248,7 @@ func deployCollatorConfig(t *testing.T, statedb *state.StateDB) {
 	// 2. add collator address to next addrs seq
 	// 3. finalize collator addrs seq by appending once more
 	appendData, err := addrsSeqABI.Pack("append")
-	if err != nil {
-		t.Fatal(err)
-	}
+	fatalIfError(t, err)
 	unsignedAppendGuardTx := &types.DynamicFeeTx{
 		ChainID:   config.ChainID,
 		Nonce:     statedb.GetNonce(deployerAddress),
@@ -254,13 +260,9 @@ func deployCollatorConfig(t *testing.T, statedb *state.StateDB) {
 		Data:      appendData,
 	}
 	appendGuardTx, err := types.SignNewTx(deployerKey, signer, unsignedAppendGuardTx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	fatalIfError(t, err)
 	addData, err := addrsSeqABI.Pack("add", []common.Address{sequencerAddress})
-	if err != nil {
-		t.Fatal(err)
-	}
+	fatalIfError(t, err)
 	unsignedAddTx := &types.DynamicFeeTx{
 		ChainID:   config.ChainID,
 		Nonce:     statedb.GetNonce(deployerAddress) + 1,
@@ -272,9 +274,7 @@ func deployCollatorConfig(t *testing.T, statedb *state.StateDB) {
 		Data:      addData,
 	}
 	addTx, err := types.SignNewTx(deployerKey, signer, unsignedAddTx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	fatalIfError(t, err)
 	unsignedAppendCollatorTx := &types.DynamicFeeTx{
 		ChainID:   config.ChainID,
 		Nonce:     statedb.GetNonce(deployerAddress) + 2,
@@ -286,16 +286,12 @@ func deployCollatorConfig(t *testing.T, statedb *state.StateDB) {
 		Data:      appendData,
 	}
 	appendCollatorTx, err := types.SignNewTx(deployerKey, signer, unsignedAppendCollatorTx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	fatalIfError(t, err)
 
 	// deploy collator config contract
 	collatorConfigBytecode := common.FromHex(collatorConfigJSON["bytecode"].(string))
 	collatorConfigDeployArgs, err := collatorConfigABI.Pack("", addrsSeqAddress)
-	if err != nil {
-		t.Fatal(err)
-	}
+	fatalIfError(t, err)
 	unsignedDeployConfigTx := &types.DynamicFeeTx{
 		ChainID:   config.ChainID,
 		Nonce:     statedb.GetNonce(deployerAddress) + 3,
@@ -307,29 +303,11 @@ func deployCollatorConfig(t *testing.T, statedb *state.StateDB) {
 		Data:      append(collatorConfigBytecode, collatorConfigDeployArgs...),
 	}
 	deployConfigTx, err := types.SignNewTx(deployerKey, signer, unsignedDeployConfigTx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	fatalIfError(t, err)
 	deployConfigBatchTx := makeBatchTx(t, statedb, []*types.Transaction{appendGuardTx, addTx, appendCollatorTx, deployConfigTx})
 	deployConfigReceipts, _, _, err := processBatchTx(t, statedb, deployConfigBatchTx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(deployConfigReceipts) != 4 {
-		t.Fatal("expected four receipts")
-	}
-	if deployConfigReceipts[0].Status != types.ReceiptStatusSuccessful {
-		t.Fatal("appending guard element failed")
-	}
-	if deployConfigReceipts[1].Status != types.ReceiptStatusSuccessful {
-		t.Fatal("adding sequencer address failed")
-	}
-	if deployConfigReceipts[2].Status != types.ReceiptStatusSuccessful {
-		t.Fatal("appending sequencer address failed")
-	}
-	if deployConfigReceipts[3].Status != types.ReceiptStatusSuccessful {
-		t.Fatal("deploying collator config contract failed")
-	}
+	fatalIfError(t, err)
+	assertTxsSuccessful(t, deployConfigReceipts, 4)
 	config.CollatorConfigListAddress = deployConfigReceipts[3].ContractAddress
 
 	// add collator config
@@ -337,9 +315,7 @@ func deployCollatorConfig(t *testing.T, statedb *state.StateDB) {
 		ActivationBlockNumber uint64
 		SetIndex              uint64
 	}{activationBlockNumber.Uint64(), 1})
-	if err != nil {
-		t.Fatal(err)
-	}
+	fatalIfError(t, err)
 	unsignedAddConfigTx := &types.DynamicFeeTx{
 		ChainID:   config.ChainID,
 		Nonce:     statedb.GetNonce(deployerAddress),
@@ -351,20 +327,11 @@ func deployCollatorConfig(t *testing.T, statedb *state.StateDB) {
 		Data:      addConfigArgs,
 	}
 	addConfigTx, err := types.SignNewTx(deployerKey, signer, unsignedAddConfigTx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	fatalIfError(t, err)
 	addConfigBatchTx := makeBatchTxWithBlockNumber(t, statedb, common.Big0, []*types.Transaction{addConfigTx})
 	addConfigReceipts, _, _, err := processBatchTx(t, statedb, addConfigBatchTx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(addConfigReceipts) != 1 {
-		t.Fatalf("expected 1 receipt when adding config, got %d", len(addConfigReceipts))
-	}
-	if addConfigReceipts[0].Status != types.ReceiptStatusSuccessful {
-		t.Fatal("adding collator config failed")
-	}
+	fatalIfError(t, err)
+	assertTxsSuccessful(t, addConfigReceipts, 1)
 }
 
 func processBatchTx(t *testing.T, statedb *state.StateDB, batchTx *types.Transaction) (types.Receipts, []*types.Log, uint64, error) {
@@ -425,15 +392,11 @@ func encryptPayload(t *testing.T, payload *types.DecryptedPayload, batchIndex ui
 	t.Helper()
 
 	payloadEncoded, err := rlp.EncodeToBytes(payload)
-	if err != nil {
-		t.Fatal(err)
-	}
+	fatalIfError(t, err)
 
 	epochId := shcrypto.ComputeEpochID(batchIndex)
 	sigma, err := shcrypto.RandomSigma(rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
+	fatalIfError(t, err)
 	encryptedPayload := shcrypto.Encrypt(payloadEncoded, eonKey, epochId, sigma)
 
 	return encryptedPayload.Marshal()
@@ -465,9 +428,7 @@ func getBatchIndexTesting(t *testing.T, statedb *state.StateDB) uint64 {
 	vmconfig := vm.Config{NoBaseFee: true}
 	vmenv := vm.NewEVM(blockContext, vm.TxContext{}, statedb, config, vmconfig)
 	batchIndex, err := getBatchIndex(vmenv, config.BatchCounterAddress)
-	if err != nil {
-		t.Fatal(err)
-	}
+	fatalIfError(t, err)
 	return batchIndex
 }
 
@@ -527,17 +488,15 @@ func TestEmptyBatch(t *testing.T) {
 	statedb := prepare(t)
 	batchTx := makeBatchTx(t, statedb, []*types.Transaction{})
 	receipts, logs, gasUsed, err := processBatchTx(t, statedb, batchTx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	fatalIfError(t, err)
 	if len(receipts) != 0 {
-		t.Fatal("expected 0 receipts")
+		t.Fatalf("expected no receipts, got %d", len(receipts))
 	}
 	if len(logs) != 0 {
-		t.Fatal("expected 0 logs")
+		t.Fatalf("expected no logs, got %d", len(logs))
 	}
-	if gasUsed > 0 {
-		t.Fatal("expected 0 gas used")
+	if gasUsed != 0 {
+		t.Fatalf("expected tx to consume zero gas")
 	}
 }
 
@@ -553,23 +512,19 @@ func TestEmptyShutterTx(t *testing.T) {
 		BatchIndex:       getBatchIndexTesting(t, statedb),
 	}
 	shutterTx, err := types.SignNewTx(userKey, signer, unsignedShutterTx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	fatalIfError(t, err)
 	batchTx := makeBatchTx(t, statedb, []*types.Transaction{shutterTx})
 
 	receipts, logs, gasUsed, err := processBatchTx(t, statedb, batchTx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	fatalIfError(t, err)
 	if len(receipts) != 0 {
-		t.Fatal("expected 0 receipts")
+		t.Fatalf("expected no receipts, got %d", len(receipts))
 	}
 	if len(logs) != 0 {
-		t.Fatal("expected 0 logs")
+		t.Fatalf("expected no logs, got %d", len(logs))
 	}
 	if gasUsed != 0 {
-		t.Fatal("expected 0 gas used")
+		t.Fatalf("expected tx to consume no gas")
 	}
 }
 
@@ -579,39 +534,31 @@ func TestEmptyShutterTxWithFee(t *testing.T) {
 		ChainID:          config.ChainID,
 		Nonce:            0,
 		GasTipCap:        big.NewInt(0),
-		GasFeeCap:        big.NewInt(500), // much smaller than base fee
+		GasFeeCap:        big.NewInt(875000000),
 		Gas:              100,
 		EncryptedPayload: []byte{},
 		BatchIndex:       getBatchIndexTesting(t, statedb),
 	}
 	shutterTx, err := types.SignNewTx(userKey, signer, unsignedShutterTx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	fatalIfError(t, err)
 	batchTx := makeBatchTx(t, statedb, []*types.Transaction{shutterTx})
 	userBalancePre := statedb.GetBalance(userAddress)
 
 	receipts, logs, gasUsed, err := processBatchTx(t, statedb, batchTx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	fatalIfError(t, err)
 	if len(receipts) != 0 {
-		t.Fatal("expected 0 receipts")
+		t.Fatalf("expected no receipts, got %d", len(receipts))
 	}
 	if len(logs) != 0 {
-		t.Fatal("expected 0 logs")
+		t.Fatalf("expected no logs, got %d", len(logs))
 	}
 	if gasUsed != 0 {
-		t.Fatal("expected 0 gas used")
+		t.Fatalf("expected tx to consume no gas, got %d", gasUsed)
 	}
 
 	userBalancePost := statedb.GetBalance(userAddress)
-	userBalanceDiff := new(big.Int).Sub(userBalancePost, userBalancePre)
-
 	expectedFee := new(big.Int).Mul(shutterTx.GasFeeCap(), new(big.Int).SetUint64(shutterTx.Gas()))
-	if new(big.Int).Neg(userBalanceDiff).Cmp(expectedFee) != 0 {
-		t.Fatalf("expected user balance to increase by %d, got %d", expectedFee, new(big.Int).Neg(userBalanceDiff))
-	}
+	assertBalanceDiff(t, userBalancePre, userBalancePost, new(big.Int).Neg(expectedFee))
 }
 
 func TestTransfer(t *testing.T) {
@@ -635,24 +582,15 @@ func TestTransfer(t *testing.T) {
 		BatchIndex:       batchIndex,
 	}
 	shutterTx, err := types.SignNewTx(userKey, signer, unsignedShutterTx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	fatalIfError(t, err)
 	batchTx := makeBatchTx(t, statedb, []*types.Transaction{shutterTx})
 
 	senderBalancePre := statedb.GetBalance(userAddress)
 	receiverBalancePre := statedb.GetBalance(receiver)
 
 	receipts, logs, gasUsed, err := processBatchTx(t, statedb, batchTx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(receipts) != 1 {
-		t.Fatal("expected 1 receipt")
-	}
-	if receipts[0].Status != types.ReceiptStatusSuccessful {
-		t.Fatal("tx should have been successful")
-	}
+	fatalIfError(t, err)
+	assertTxsSuccessful(t, receipts, 1)
 	if len(logs) != 0 {
 		t.Fatal("expected 0 logs")
 	}
@@ -662,16 +600,8 @@ func TestTransfer(t *testing.T) {
 
 	senderBalancePost := statedb.GetBalance(userAddress)
 	receiverBalancePost := statedb.GetBalance(receiver)
-
-	senderBalanceDiff := new(big.Int).Sub(senderBalancePost, senderBalancePre)
-	receiverBalanceDiff := new(big.Int).Sub(receiverBalancePost, receiverBalancePre)
-
-	if senderBalanceDiff.Cmp(new(big.Int).Neg(amount)) != 0 {
-		t.Fatalf("expected sender balance to decrease by %d, got increase by %d", amount, senderBalanceDiff)
-	}
-	if receiverBalanceDiff.Cmp(amount) != 0 {
-		t.Fatalf("expected receiver balance to increase by %d, got %d", amount, receiverBalanceDiff)
-	}
+	assertBalanceDiff(t, senderBalancePre, senderBalancePost, new(big.Int).Neg(amount))
+	assertBalanceDiff(t, receiverBalancePre, receiverBalancePost, amount)
 }
 
 func TestContractCall(t *testing.T) {
@@ -710,28 +640,17 @@ func TestContractCall(t *testing.T) {
 	}
 
 	deployTx, err := types.SignNewTx(userKey, signer, unsignedDeployTx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	fatalIfError(t, err)
 	callTx, err := types.SignNewTx(userKey, signer, unsignedCallTx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	fatalIfError(t, err)
 	batchTx := makeBatchTx(t, statedb, []*types.Transaction{
 		deployTx,
 		callTx,
 	})
 
 	receipts, logs, _, err := processBatchTx(t, statedb, batchTx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(receipts) != 2 {
-		t.Fatal("expected 2 receipts")
-	}
-	if receipts[1].Status != types.ReceiptStatusSuccessful {
-		t.Fatal("tx should have been successful")
-	}
+	fatalIfError(t, err)
+	assertTxsSuccessful(t, receipts, 2)
 	if len(logs) != 0 {
 		t.Fatal("expected 0 logs")
 	}
@@ -756,21 +675,12 @@ func TestContractDeployment(t *testing.T) {
 		BatchIndex:       batchIndex,
 	}
 	shutterTx, err := types.SignNewTx(userKey, signer, unsignedShutterTx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	fatalIfError(t, err)
 	batchTx := makeBatchTx(t, statedb, []*types.Transaction{shutterTx})
 
 	receipts, logs, _, err := processBatchTx(t, statedb, batchTx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(receipts) != 1 {
-		t.Fatal("expected 1 receipts")
-	}
-	if receipts[0].Status != types.ReceiptStatusSuccessful {
-		t.Fatal("tx should have been successful")
-	}
+	fatalIfError(t, err)
+	assertTxsSuccessful(t, receipts, 1)
 	if bytes.Equal(receipts[0].ContractAddress.Bytes(), common.Address{}.Bytes()) {
 		t.Fatal("should have deployed contract")
 	}
@@ -789,9 +699,7 @@ func TestGetEonKey(t *testing.T) {
 
 	// mine empty block to test the verification of eon key
 	_, _, _, err := processBatchTx(t, statedb, makeBatchTx(t, statedb, []*types.Transaction{}))
-	if err != nil {
-		t.Fatal(err)
-	}
+	fatalIfError(t, err)
 }
 
 func TestPlaintextTx(t *testing.T) {
@@ -816,9 +724,7 @@ func TestPlaintextTx(t *testing.T) {
 		BatchIndex:       batchIndex,
 	}
 	shutterTx, err := types.SignNewTx(userKey, signer, unsignedShutterTx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	fatalIfError(t, err)
 	unsignedPlainTx := &types.LegacyTx{
 		Nonce:    statedb.GetNonce(userAddress) + 1,
 		GasPrice: common.Big0,
@@ -827,27 +733,15 @@ func TestPlaintextTx(t *testing.T) {
 		Value:    amount,
 	}
 	plainTx, err := types.SignNewTx(userKey, signer, unsignedPlainTx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	fatalIfError(t, err)
 	batchTx := makeBatchTx(t, statedb, []*types.Transaction{shutterTx, plainTx})
 
 	senderBalancePre := statedb.GetBalance(userAddress)
 	receiverBalancePre := statedb.GetBalance(receiver)
 
 	receipts, logs, gasUsed, err := processBatchTx(t, statedb, batchTx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(receipts) != 2 {
-		t.Fatal("expected 2 receipt")
-	}
-	if receipts[0].Status != types.ReceiptStatusSuccessful {
-		t.Fatal("cipher tx should have been successful")
-	}
-	if receipts[1].Status != types.ReceiptStatusSuccessful {
-		t.Fatal("plain tx should have been successful")
-	}
+	fatalIfError(t, err)
+	assertTxsSuccessful(t, receipts, 2)
 	if len(logs) != 0 {
 		t.Fatal("expected 0 logs")
 	}
@@ -857,17 +751,9 @@ func TestPlaintextTx(t *testing.T) {
 
 	senderBalancePost := statedb.GetBalance(userAddress)
 	receiverBalancePost := statedb.GetBalance(receiver)
-
-	senderBalanceDiff := new(big.Int).Sub(senderBalancePost, senderBalancePre)
-	receiverBalanceDiff := new(big.Int).Sub(receiverBalancePost, receiverBalancePre)
 	expectedDiff := new(big.Int).Mul(amount, common.Big2)
-
-	if senderBalanceDiff.Cmp(new(big.Int).Neg(expectedDiff)) != 0 {
-		t.Fatalf("expected sender balance to decrease by %d, got increase by %d", expectedDiff, senderBalanceDiff)
-	}
-	if receiverBalanceDiff.Cmp(expectedDiff) != 0 {
-		t.Fatalf("expected receiver balance to increase by %d, got %d", expectedDiff, receiverBalanceDiff)
-	}
+	assertBalanceDiff(t, senderBalancePre, senderBalancePost, new(big.Int).Neg(expectedDiff))
+	assertBalanceDiff(t, receiverBalancePre, receiverBalancePost, expectedDiff)
 }
 
 func TestWrongBatchIndex(t *testing.T) {
@@ -882,9 +768,7 @@ func TestWrongBatchIndex(t *testing.T) {
 		Transactions:  [][]byte{},
 	}
 	batchTx, err := types.SignNewTx(sequencerKey, signer, &unsignedBatchTx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	fatalIfError(t, err)
 	_, _, _, err = processBatchTx(t, statedb, batchTx)
 	if err == nil {
 		t.Fatal("batch tx with batch index too large was not rejected")
@@ -894,9 +778,7 @@ func TestWrongBatchIndex(t *testing.T) {
 	unsignedBatchTx.BatchIndex = batchIndex
 	unsignedBatchTx.DecryptionKey = decryptionKeys[batchIndex].Marshal()
 	batchTx, err = types.SignNewTx(sequencerKey, signer, &unsignedBatchTx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	fatalIfError(t, err)
 	_, _, _, err = processBatchTx(t, statedb, batchTx)
 	if err == nil {
 		t.Fatal("batch tx with batch index too small was not rejected")
@@ -916,9 +798,7 @@ func TestSignatureCheck(t *testing.T) {
 	}
 
 	batchTx, err := types.SignNewTx(userKey, signer, &unsignedBatchTx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	fatalIfError(t, err)
 	_, _, _, err = processBatchTx(t, statedb, batchTx)
 	if err == nil {
 		t.Fatal("batch tx with wrong signature was not rejected")
