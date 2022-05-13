@@ -148,7 +148,9 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 	if err != nil {
 		return nil, nil, 0, err
 	}
+	var processShutterTxs bool
 	if eonKey != nil {
+		processShutterTxs = true
 		ok, err := shcrypto.VerifyEpochSecretKey(decryptionKey, eonKey, batchTx.BatchIndex())
 		if err != nil {
 			return nil, nil, 0, err
@@ -156,6 +158,8 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 		if !ok {
 			return nil, nil, 0, fmt.Errorf("decryption key is not correct for batch %d", batchTx.BatchIndex())
 		}
+	} else {
+		processShutterTxs = false
 	}
 
 	// check batch signature (if the collator config contract has been deployed yet)
@@ -189,13 +193,9 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 		transactions = append(transactions, tx)
 	}
 
-	// Execute the envelopes of shutter txs if we found the eon key. Remember for which
-	// transaction the fee has been paid successfully, because this is a precondition for
-	// executing them later.
-	feePaid := make(map[int]bool)
-	if eonKey != nil {
+	// Execute the envelopes of shutter txs if we found the eon key.
+	if processShutterTxs {
 		for i, tx := range transactions {
-			feePaid[i] = false
 			if tx.Type() != types.ShutterTxType {
 				continue
 			}
@@ -220,11 +220,8 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 			if balance.Cmp(gasFee) < 0 {
 				return nil, nil, 0, fmt.Errorf("invalid tx %d [%v]: cannot pay for gas", i, tx.Hash())
 			}
-			if balance.Cmp(gasFee) >= 0 {
-				statedb.SubBalance(sender, gasFee)
-				statedb.AddBalance(coinbase, priorityFee)
-				feePaid[i] = true
-			}
+			statedb.SubBalance(sender, gasFee)
+			statedb.AddBalance(coinbase, priorityFee)
 		}
 	}
 
@@ -232,9 +229,7 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 	for i, tx := range transactions {
 		var msg types.Message
 		if tx.Type() == types.ShutterTxType {
-			// Decrypt shutter txs if they paid the transaction fee.
-			if !feePaid[i] {
-				fmt.Printf("skipping execution of tx %d [%v] as it didn't pay the fee\n", i, tx.Hash().Hex())
+			if !processShutterTxs {
 				continue
 			}
 			decryptedPayload, err := decryptPayload(tx.EncryptedPayload(), decryptionKey)
