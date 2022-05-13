@@ -510,7 +510,7 @@ func TestEmptyShutterTx(t *testing.T) {
 		Nonce:            0,
 		GasTipCap:        big.NewInt(0),
 		GasFeeCap:        defaultBaseFee,
-		Gas:              0,
+		Gas:              21000,
 		EncryptedPayload: []byte{},
 		BatchIndex:       getBatchIndexTesting(t, statedb),
 	}
@@ -534,7 +534,7 @@ func TestEmptyShutterTx(t *testing.T) {
 func TestEmptyShutterTxWithFee(t *testing.T) {
 	statedb := prepare(t)
 
-	txGas := uint64(100)
+	txGas := uint64(30000)
 	tests := []struct {
 		name           string
 		txGasTipCap    *big.Int

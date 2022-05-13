@@ -204,6 +204,9 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 				return nil, nil, 0, fmt.Errorf("could not extract signer of tx %d [%v]: %w", i, tx.Hash().Hex(), err)
 			}
 
+			if tx.Gas() < params.TxGas {
+				return nil, nil, 0, fmt.Errorf("invalid tx %d [%v]: tx gas lower than minimum (%v < %v)", i, tx.Hash(), tx.Gas(), params.TxGas)
+			}
 			if tx.GasFeeCap().Cmp(tx.GasTipCap()) < 0 {
 				return nil, nil, 0, fmt.Errorf("invalid tx %d [%v]: gas fee cap lower than gas tip cap (%v < %v)", i, tx.Hash(), tx.GasFeeCap(), tx.GasTipCap())
 			}
