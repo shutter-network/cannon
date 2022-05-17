@@ -590,7 +590,7 @@ func TestEmptyShutterTxWithFee(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			unsignedShutterTx := &types.ShutterTx{
 				ChainID:          config.ChainID,
-				Nonce:            0,
+				Nonce:            statedb.GetNonce(userAddress),
 				GasTipCap:        tc.txGasTipCap,
 				GasFeeCap:        tc.txGasFeeCap,
 				Gas:              txGas,

@@ -230,19 +230,33 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 
 	// execute transactions
 	for i, tx := range transactions {
+		if tx.Type() == types.ShutterTxType && !processShutterTxs {
+			continue
+		}
+
+		sender, err := signer.Sender(tx)
+		if err != nil {
+			return nil, nil, 0, fmt.Errorf("could not extract signer of tx %d [%v]: %w", i, tx.Hash().Hex(), err)
+		}
+		// Manually check the nonce. This is redundant for all txs that actually get applied,
+		// but not for Shutter txs that fail to get decrypted.
+		accountNonce := statedb.GetNonce(sender)
+		if tx.Nonce() != accountNonce {
+			return nil, nil, 0, fmt.Errorf("invalid tx %d [%v]: tx nonce does not match account nonce (%d != %d)", i, tx.Hash(), tx.Nonce(), accountNonce)
+		}
+
 		var msg types.Message
 		if tx.Type() == types.ShutterTxType {
-			if !processShutterTxs {
-				continue
-			}
 			decryptedPayload, err := decryptPayload(tx.EncryptedPayload(), decryptionKey)
 			if err != nil {
 				fmt.Printf("could not decrypt tx %d [%v]: %s\n", i, tx.Hash().Hex(), err)
+				statedb.SetNonce(sender, tx.Nonce()+1)
 				continue
 			}
 			msg, err = decryptedPayload.AsMessage(tx, signer)
 			if err != nil {
 				fmt.Printf("could not convert decrypted tx %d into msg [%v]: %s\n", i, tx.Hash().Hex(), err)
+				statedb.SetNonce(sender, tx.Nonce()+1)
 				continue
 			}
 		} else {
