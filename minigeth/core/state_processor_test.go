@@ -513,6 +513,7 @@ func TestEmptyShutterTx(t *testing.T) {
 		Gas:              21000,
 		EncryptedPayload: []byte{},
 		BatchIndex:       getBatchIndexTesting(t, statedb),
+		L1BlockNumber:    activationBlockNumber,
 	}
 	shutterTx, err := types.SignNewTx(userKey, signer, unsignedShutterTx)
 	fatalIfError(t, err)
@@ -595,6 +596,8 @@ func TestEmptyShutterTxWithFee(t *testing.T) {
 				GasFeeCap:        tc.txGasFeeCap,
 				Gas:              txGas,
 				EncryptedPayload: []byte{},
+				BatchIndex:       getBatchIndexTesting(t, statedb),
+				L1BlockNumber:    activationBlockNumber,
 			}
 			shutterTx, err := types.SignNewTx(userKey, signer, unsignedShutterTx)
 			if err != nil {
@@ -657,6 +660,7 @@ func TestTransfer(t *testing.T) {
 		Gas:              21000,
 		EncryptedPayload: encryptPayload(t, payload, batchIndex),
 		BatchIndex:       batchIndex,
+		L1BlockNumber:    activationBlockNumber,
 	}
 	shutterTx, err := types.SignNewTx(userKey, signer, unsignedShutterTx)
 	fatalIfError(t, err)
@@ -701,6 +705,7 @@ func TestContractCall(t *testing.T) {
 		Gas:              1000000,
 		EncryptedPayload: encryptPayload(t, deployPayload, batchIndex),
 		BatchIndex:       batchIndex,
+		L1BlockNumber:    activationBlockNumber,
 	}
 
 	contractAddress := common.HexToAddress("0xFA33c8EF8b5c4f3003361c876a298D1DB61ccA4e")
@@ -717,6 +722,7 @@ func TestContractCall(t *testing.T) {
 		Gas:              100000,
 		EncryptedPayload: encryptPayload(t, callPayload, batchIndex),
 		BatchIndex:       batchIndex,
+		L1BlockNumber:    activationBlockNumber,
 	}
 
 	deployTx, err := types.SignNewTx(userKey, signer, unsignedDeployTx)
@@ -753,6 +759,7 @@ func TestContractDeployment(t *testing.T) {
 		Gas:              1000000,
 		EncryptedPayload: encryptPayload(t, payload, batchIndex),
 		BatchIndex:       batchIndex,
+		L1BlockNumber:    activationBlockNumber,
 	}
 	shutterTx, err := types.SignNewTx(userKey, signer, unsignedShutterTx)
 	fatalIfError(t, err)
@@ -802,6 +809,7 @@ func TestPlaintextTx(t *testing.T) {
 		Gas:              21000,
 		EncryptedPayload: encryptPayload(t, payload, batchIndex),
 		BatchIndex:       batchIndex,
+		L1BlockNumber:    activationBlockNumber,
 	}
 	shutterTx, err := types.SignNewTx(userKey, signer, unsignedShutterTx)
 	fatalIfError(t, err)
@@ -884,5 +892,46 @@ func TestSignatureCheck(t *testing.T) {
 	_, _, _, err = processBatchTx(t, statedb, batchTx)
 	if err == nil {
 		t.Fatal("batch tx with wrong signature was not rejected")
+	}
+}
+
+func TestBatchIndexAndBlockNumberMatch(t *testing.T) {
+	statedb := prepare(t)
+
+	deltas := []struct {
+		BatchIndex    int
+		L1BlockNumber int
+	}{
+		{
+			BatchIndex: -1,
+		},
+		{
+			BatchIndex: 1,
+		},
+		{
+			L1BlockNumber: -1,
+		},
+		{
+			L1BlockNumber: 1,
+		},
+	}
+	for _, delta := range deltas {
+		unsignedShutterTx := &types.ShutterTx{
+			ChainID:          config.ChainID,
+			Nonce:            0,
+			GasTipCap:        big.NewInt(0),
+			GasFeeCap:        defaultBaseFee,
+			Gas:              21000,
+			EncryptedPayload: []byte{},
+			BatchIndex:       uint64(int(getBatchIndexTesting(t, statedb)) + delta.BatchIndex),
+			L1BlockNumber:    uint64(int(activationBlockNumber) + delta.L1BlockNumber),
+		}
+		shutterTx, err := types.SignNewTx(userKey, signer, unsignedShutterTx)
+		fatalIfError(t, err)
+		batchTx := makeBatchTx(t, statedb, []*types.Transaction{shutterTx})
+		_, _, _, err = processBatchTx(t, statedb, batchTx)
+		if err == nil {
+			t.Fatal("invalid batch was not rejected")
+		}
 	}
 }

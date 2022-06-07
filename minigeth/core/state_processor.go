@@ -204,6 +204,15 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 				return nil, nil, 0, fmt.Errorf("could not extract signer of tx %d [%v]: %w", i, tx.Hash().Hex(), err)
 			}
 
+			if tx.BatchIndex() != batchTx.BatchIndex() {
+				return nil, nil, 0, fmt.Errorf("invalid tx %d [%v]: batch index mismatch between shutter tx and batch (%d != %d)",
+					i, tx.Hash(), tx.BatchIndex(), batchTx.BatchIndex())
+			}
+			if tx.L1BlockNumber() != batchTx.L1BlockNumber() {
+				return nil, nil, 0, fmt.Errorf("invalid tx %d [%v]: l1 block number mismatch between shutter tx and batch (%d != %d)",
+					i, tx.Hash(), tx.L1BlockNumber(), batchTx.L1BlockNumber())
+			}
+
 			if tx.Gas() < params.TxGas {
 				return nil, nil, 0, fmt.Errorf("invalid tx %d [%v]: tx gas lower than minimum (%v < %v)", i, tx.Hash(), tx.Gas(), params.TxGas)
 			}
