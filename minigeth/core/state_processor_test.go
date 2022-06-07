@@ -28,8 +28,8 @@ var (
 	config                = params.TestChainConfig
 	genesisHash           = common.HexToHash("0xd702d0441aa0045ac875b526e6ea7064e67604ef2162034a9b7260540f3e9f25")
 	signer                types.Signer
-	defaultBaseFee        = new(big.Int).SetUint64(1_000_000_000) // 1 GWei
-	activationBlockNumber = big.NewInt(100)
+	defaultBaseFee               = new(big.Int).SetUint64(1_000_000_000) // 1 GWei
+	activationBlockNumber uint64 = 100
 
 	deployerKey      *ecdsa.PrivateKey
 	deployerAddress  common.Address
@@ -157,7 +157,7 @@ func makeBatchTx(t *testing.T, statedb *state.StateDB, transactions []*types.Tra
 	return makeBatchTxWithBlockNumber(t, statedb, activationBlockNumber, transactions)
 }
 
-func makeBatchTxWithBlockNumber(t *testing.T, statedb *state.StateDB, blockNumber *big.Int, transactions []*types.Transaction) *types.Transaction {
+func makeBatchTxWithBlockNumber(t *testing.T, statedb *state.StateDB, blockNumber uint64, transactions []*types.Transaction) *types.Transaction {
 	batchIndex := getBatchIndexTesting(t, statedb)
 	txBytes := [][]byte{}
 	for _, tx := range transactions {
@@ -313,7 +313,7 @@ func deployCollatorConfig(t *testing.T, statedb *state.StateDB) {
 	addConfigArgs, err := collatorConfigABI.Pack("addNewCfg", struct {
 		ActivationBlockNumber uint64
 		SetIndex              uint64
-	}{activationBlockNumber.Uint64(), 1})
+	}{activationBlockNumber, 1})
 	fatalIfError(t, err)
 	unsignedAddConfigTx := &types.DynamicFeeTx{
 		ChainID:   config.ChainID,
@@ -327,7 +327,7 @@ func deployCollatorConfig(t *testing.T, statedb *state.StateDB) {
 	}
 	addConfigTx, err := types.SignNewTx(deployerKey, signer, unsignedAddConfigTx)
 	fatalIfError(t, err)
-	addConfigBatchTx := makeBatchTxWithBlockNumber(t, statedb, common.Big0, []*types.Transaction{addConfigTx})
+	addConfigBatchTx := makeBatchTxWithBlockNumber(t, statedb, 0, []*types.Transaction{addConfigTx})
 	addConfigReceipts, _, _, err := processBatchTx(t, statedb, addConfigBatchTx)
 	fatalIfError(t, err)
 	assertTxsSuccessful(t, addConfigReceipts, 1)
@@ -845,7 +845,7 @@ func TestWrongBatchIndex(t *testing.T) {
 		ChainID:       config.ChainID,
 		DecryptionKey: decryptionKeys[batchIndex].Marshal(),
 		BatchIndex:    batchIndex,
-		L1BlockNumber: common.Big0,
+		L1BlockNumber: 0,
 		Timestamp:     common.Big0,
 		Transactions:  [][]byte{},
 	}
