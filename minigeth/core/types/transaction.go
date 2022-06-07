@@ -316,7 +316,7 @@ func (tx *Transaction) BatchIndex() uint64 { return tx.inner.batchIndex() }
 
 // L1BlockNumber returns the Layer 1 block number used for identifying the
 // collator/keyper config
-func (tx *Transaction) L1BlockNumber() *big.Int { return tx.inner.l1BlockNumber() }
+func (tx *Transaction) L1BlockNumber() uint64 { return tx.inner.l1BlockNumber() }
 
 // Timestamp returns the timestamp ()
 func (tx *Transaction) Timestamp() *big.Int { return tx.inner.timestamp() }

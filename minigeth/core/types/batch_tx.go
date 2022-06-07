@@ -10,7 +10,7 @@ type BatchTx struct {
 	ChainID       *big.Int
 	DecryptionKey []byte
 	BatchIndex    uint64
-	L1BlockNumber *big.Int
+	L1BlockNumber uint64
 	Timestamp     *big.Int
 	Transactions  [][]byte
 
@@ -26,7 +26,7 @@ func (tx *BatchTx) copy() TxData {
 		ChainID:       new(big.Int),
 		DecryptionKey: []byte{},
 		BatchIndex:    tx.BatchIndex,
-		L1BlockNumber: new(big.Int),
+		L1BlockNumber: tx.L1BlockNumber,
 		Timestamp:     new(big.Int),
 	}
 	if tx.ChainID != nil {
@@ -35,9 +35,6 @@ func (tx *BatchTx) copy() TxData {
 	if tx.DecryptionKey != nil {
 		cpy.DecryptionKey = make([]byte, len(tx.DecryptionKey))
 		copy(cpy.DecryptionKey, tx.DecryptionKey)
-	}
-	if tx.L1BlockNumber != nil {
-		cpy.L1BlockNumber.Set(tx.L1BlockNumber)
 	}
 	if tx.Timestamp != nil {
 		cpy.Timestamp.Set(tx.Timestamp)
@@ -78,7 +75,7 @@ func (tx *BatchTx) to() *common.Address      { return nil }
 func (tx *BatchTx) encryptedPayload() []byte { return nil }
 func (tx *BatchTx) decryptionKey() []byte    { return tx.DecryptionKey }
 func (tx *BatchTx) batchIndex() uint64       { return tx.BatchIndex }
-func (tx *BatchTx) l1BlockNumber() *big.Int  { return tx.L1BlockNumber }
+func (tx *BatchTx) l1BlockNumber() uint64    { return tx.L1BlockNumber }
 func (tx *BatchTx) timestamp() *big.Int      { return tx.Timestamp }
 func (tx *BatchTx) transactions() [][]byte   { return tx.Transactions }
 
