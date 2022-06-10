@@ -204,6 +204,15 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 				return nil, nil, 0, fmt.Errorf("could not extract signer of tx %d [%v]: %w", i, tx.Hash().Hex(), err)
 			}
 
+			if tx.BatchIndex() != batchTx.BatchIndex() {
+				return nil, nil, 0, fmt.Errorf("invalid tx %d [%v]: batch index mismatch between shutter tx and batch (%d != %d)",
+					i, tx.Hash(), tx.BatchIndex(), batchTx.BatchIndex())
+			}
+			if tx.L1BlockNumber() != batchTx.L1BlockNumber() {
+				return nil, nil, 0, fmt.Errorf("invalid tx %d [%v]: l1 block number mismatch between shutter tx and batch (%d != %d)",
+					i, tx.Hash(), tx.L1BlockNumber(), batchTx.L1BlockNumber())
+			}
+
 			if tx.Gas() < params.TxGas {
 				return nil, nil, 0, fmt.Errorf("invalid tx %d [%v]: tx gas lower than minimum (%v < %v)", i, tx.Hash(), tx.Gas(), params.TxGas)
 			}
@@ -299,20 +308,20 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 	return receipts, allLogs, *usedGas, nil
 }
 
-func getEonKeyFromContract(e *vm.EVM, eonKeyContract common.Address, blockNumber *big.Int) (*shcrypto.EonPublicKey, error) {
+func getEonKeyFromContract(e *vm.EVM, eonKeyContract common.Address, blockNumber uint64) (*shcrypto.EonPublicKey, error) {
 	caller := vm.AccountRef(common.Address{})
 
-	callData, err := eonKeyStorageABI.Pack("get", blockNumber.Uint64())
+	callData, err := eonKeyStorageABI.Pack("get", blockNumber)
 	if err != nil {
 		return nil, err
 	}
 	result, _, err := e.Call(caller, eonKeyContract, callData, 1000000, common.Big0)
 	if err != nil {
-		log.Printf("failed to find eon key for block #%s: %s", blockNumber, err)
+		log.Printf("failed to find eon key for block #%d: %s", blockNumber, err)
 		return nil, nil
 	}
 	if len(result) == 0 {
-		log.Printf("no eon key available for block #%s", blockNumber)
+		log.Printf("no eon key available for block #%d", blockNumber)
 		return nil, nil
 	}
 
@@ -361,13 +370,13 @@ func getBatchIndex(e *vm.EVM, batchCounterContract common.Address) (uint64, erro
 // getCollatorAddress returns the address configured as the collator in the collator config
 // contract for the given L1 block number. If the contract hasn't been deployed yet, it returns
 // nil.
-func getCollatorAddress(e *vm.EVM, collatorConfigContract common.Address, blockNumber *big.Int) (*common.Address, error) {
+func getCollatorAddress(e *vm.EVM, collatorConfigContract common.Address, blockNumber uint64) (*common.Address, error) {
 	if e.StateDB.GetCodeSize(collatorConfigContract) == 0 {
 		return nil, nil
 	}
 
 	caller := vm.AccountRef(common.Address{})
-	configData, err := collatorConfigABI.Pack("getActiveConfig", blockNumber.Uint64())
+	configData, err := collatorConfigABI.Pack("getActiveConfig", blockNumber)
 	if err != nil {
 		return nil, err
 	}
