@@ -28,6 +28,9 @@ func (tx *BatchTx) copy() TxData {
 		BatchIndex:    tx.BatchIndex,
 		L1BlockNumber: tx.L1BlockNumber,
 		Timestamp:     new(big.Int),
+		V:             new(big.Int),
+		R:             new(big.Int),
+		S:             new(big.Int),
 	}
 	if tx.ChainID != nil {
 		cpy.ChainID.Set(tx.ChainID)
